@@ -8,7 +8,7 @@ from sqlalchemy.orm import selectinload
 from core.database import get_db
 from core.security import get_current_user
 from models.user import User, YearLevel
-from models.project import Project, ProjectStatus, ProjectApplication
+from models.project import Project, ProjectStatus, ProjectType, ProjectApplication
 from services.matching_service import (
     match_user_to_project,
     match_mentor_to_mentee,
@@ -45,6 +45,15 @@ class MentorMatchResponse(BaseModel):
     explanation: str
     is_available: bool
     active_mentees: int
+
+
+class ProjectCreate(BaseModel):
+    title: str
+    description: str
+    type: str = "tech"
+    max_members: int = 5
+    required_skills: List[str] = []
+    required_hours_per_week: int = 8
 
 
 # ─────────────────────────────────────────────────────────────
@@ -107,6 +116,53 @@ async def get_project_matches(
 
 
 # ─────────────────────────────────────────────────────────────
+# POST /matching/projects (Créer un projet)
+# ─────────────────────────────────────────────────────────────
+
+@router.post("/projects", status_code=status.HTTP_201_CREATED)
+async def create_project(
+    project_data: ProjectCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Créer un nouveau projet"""
+    
+    # Convertir le type string en enum ProjectType
+    try:
+        project_type = ProjectType(project_data.type)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Type de projet invalide. Choisir parmi: {[t.value for t in ProjectType]}")
+    
+    new_project = Project(
+        title=project_data.title,
+        description=project_data.description,
+        type=project_type,
+        required_skills=project_data.required_skills,
+        max_members=project_data.max_members,
+        required_hours_per_week=project_data.required_hours_per_week,
+        status=ProjectStatus.OPEN,
+        created_by=current_user.id,
+    )
+    
+    db.add(new_project)
+    await db.commit()
+    await db.refresh(new_project)
+    
+    return {
+        "id": new_project.id,
+        "title": new_project.title,
+        "description": new_project.description,
+        "type": new_project.type.value,
+        "max_members": new_project.max_members,
+        "required_skills": new_project.required_skills,
+        "required_hours_per_week": new_project.required_hours_per_week,
+        "status": new_project.status.value,
+        "created_by": new_project.created_by,
+        "created_at": new_project.created_at.isoformat(),
+    }
+
+
+# ─────────────────────────────────────────────────────────────
 # POST /matching/projects/{id}/apply
 # ─────────────────────────────────────────────────────────────
 
@@ -155,9 +211,11 @@ async def apply_to_project(
         applicant_id=current_user.id,
         match_score=match.total_score,
         message=message,
+        status="pending",
     )
     db.add(application)
-    await db.flush()
+    await db.commit()
+    await db.refresh(application)
 
     return {
         "message": "Candidature envoyée avec succès",
@@ -180,14 +238,11 @@ async def get_mentor_matches(
     Retourne les mentors compatibles pour l'utilisateur connecté.
     Un mentor doit avoir un niveau supérieur (B1 → B2 → B3 → M1 → M2).
     """
-    # Ordre des niveaux
     level_order = {"B1": 1, "B2": 2, "B3": 3, "M1": 4, "M2": 5}
     
-    # Niveau du mentoré (utilisateur connecté)
     mentee_level_str = current_user.year_level.value if current_user.year_level else "B1"
     mentee_order = level_order.get(mentee_level_str, 1)
     
-    # Déterminer les niveaux supérieurs
     eligible_levels = []
     for level, order in level_order.items():
         if order > mentee_order:
@@ -197,10 +252,8 @@ async def get_mentor_matches(
     print(f"[MATCHING] Niveaux éligibles pour mentor: {eligible_levels}")
     
     if not eligible_levels:
-        # Si l'utilisateur est déjà au niveau maximum (M2)
         return []
     
-    # Rechercher les mentors potentiels
     stmt = select(User).where(
         User.year_level.in_(eligible_levels),
         User.is_active == True,
@@ -212,13 +265,10 @@ async def get_mentor_matches(
     
     print(f"[MATCHING] Mentors trouvés: {len(mentors)}")
     
-    # Construire la réponse
     matches = []
     for mentor in mentors:
-        # Compter les mentorés actifs
         active_mentees = len([m for m in mentor.mentorships_as_mentor if m.status == "active"])
         
-        # Calculer un score simple basé sur la spécialité
         score = 85
         if current_user.specialty and mentor.specialty:
             if current_user.specialty.lower() in mentor.specialty.lower() or mentor.specialty.lower() in current_user.specialty.lower():
@@ -231,11 +281,10 @@ async def get_mentor_matches(
             specialty=mentor.specialty,
             score_percent=score,
             total_score=score / 100,
-            explanation=f"Mentor de niveau {mentor.year_level.value} - Spécialité: {mentor.specialty or 'Non renseignée'}",
+            explanation=f"Mentor de niveau {mentor.year_level.value if mentor.year_level else '?'} - Spécialité: {mentor.specialty or 'Non renseignée'}",
             is_available=mentor.is_available,
             active_mentees=active_mentees,
         ))
     
-    # Trier par score
     matches.sort(key=lambda x: x.score_percent, reverse=True)
     return matches[:top_k]

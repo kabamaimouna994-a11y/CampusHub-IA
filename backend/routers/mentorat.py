@@ -11,6 +11,24 @@ from core.security import get_current_user
 from models.user import User
 from models.mentorship import Mentorship, MentoringSession, MentorMessage
 
+
+def _ensure_aware(dt: datetime) -> datetime:
+    """S'assure que le datetime est timezone-aware (UTC)."""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+# ⭐ ORDRE DES NIVEAUX POUR LE MENTORAT ⭐
+LEVEL_ORDER = {
+    "B1": 1,
+    "B2": 2,
+    "B3": 3,
+    "M1": 4,
+    "M2": 5
+}
+
+
 router = APIRouter()
 
 
@@ -42,8 +60,15 @@ class MessageCreate(BaseModel):
     content: str
 
 
+# ========== MENTORATS ==========
+
 @router.get("/")
-async def get_my_mentorships(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def get_my_mentorships(
+    current_user: User = Depends(get_current_user), 
+    db: AsyncSession = Depends(get_db)
+):
+    """Récupère toutes les relations de mentorat de l'utilisateur"""
+    
     stmt = select(Mentorship).where(
         (Mentorship.mentor_id == current_user.id) | (Mentorship.mentee_id == current_user.id)
     ).options(selectinload(Mentorship.mentor), selectinload(Mentorship.mentee))
@@ -52,10 +77,16 @@ async def get_my_mentorships(current_user: User = Depends(get_current_user), db:
 
     output = []
     for m in mentorships:
-        partner = m.mentee if m.mentor_id == current_user.id else m.mentor
+        if m.mentor_id == current_user.id:
+            partner = m.mentee
+            role = "mentor"
+        else:
+            partner = m.mentor
+            role = "mentoré"
+        
         output.append({
             "id": m.id,
-            "role": "mentor" if m.mentor_id == current_user.id else "mentoré",
+            "role": role,
             "partner_name": partner.full_name,
             "partner_year_level": partner.year_level.value if partner.year_level else None,
             "status": m.status,
@@ -64,20 +95,69 @@ async def get_my_mentorships(current_user: User = Depends(get_current_user), db:
 
 
 @router.post("/", status_code=status.HTTP_201_CREATED)
-async def create_mentorship(data: MentorshipCreate, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def create_mentorship(
+    data: MentorshipCreate, 
+    current_user: User = Depends(get_current_user), 
+    db: AsyncSession = Depends(get_db)
+):
+    """Crée une relation de mentorat - ⭐ Vérifie la hiérarchie des niveaux ⭐"""
+    
     result = await db.execute(select(User).where(User.id == data.mentor_id))
     mentor = result.scalar_one_or_none()
     if not mentor:
         raise HTTPException(status_code=404, detail="Mentor introuvable")
-
-    mentorship = Mentorship(mentor_id=data.mentor_id, mentee_id=current_user.id, goals=data.goals)
+    
+    # ⭐ VÉRIFICATION DE LA HIÉRARCHIE ⭐
+    mentee_level = current_user.year_level.value if current_user.year_level else "B1"
+    mentor_level = mentor.year_level.value if mentor.year_level else "B1"
+    
+    mentee_order = LEVEL_ORDER.get(mentee_level, 1)
+    mentor_order = LEVEL_ORDER.get(mentor_level, 1)
+    
+    if mentor_order <= mentee_order:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Le mentor doit avoir un niveau supérieur. "
+                   f"Votre niveau: {mentee_level}, Niveau du mentor: {mentor_level}. "
+                   f"Hiérarchie acceptée: B1 → B2 → B3 → M1 → M2"
+        )
+    
+    # Vérifier si une relation existe déjà
+    existing = await db.execute(
+        select(Mentorship).where(
+            Mentorship.mentor_id == data.mentor_id,
+            Mentorship.mentee_id == current_user.id
+        )
+    )
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="Vous avez déjà contacté ce mentor")
+    
+    mentorship = Mentorship(
+        mentor_id=data.mentor_id, 
+        mentee_id=current_user.id, 
+        goals=data.goals,
+        status="pending"
+    )
     db.add(mentorship)
     await db.flush()
-    return {"id": mentorship.id, "mentor_name": mentor.full_name, "message": "Relation de mentorat créée"}
+    
+    return {
+        "id": mentorship.id, 
+        "mentor_name": mentor.full_name, 
+        "mentor_level": mentor_level,
+        "message": "Demande de mentorat envoyée"
+    }
 
+
+# ========== MESSAGES ==========
 
 @router.post("/{mentorship_id}/messages", status_code=status.HTTP_201_CREATED)
-async def send_message(mentorship_id: int, data: MessageCreate, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def send_message(
+    mentorship_id: int, 
+    data: MessageCreate, 
+    current_user: User = Depends(get_current_user), 
+    db: AsyncSession = Depends(get_db)
+):
     result = await db.execute(select(Mentorship).where(Mentorship.id == mentorship_id))
     mentorship = result.scalar_one_or_none()
     if not mentorship:
@@ -124,9 +204,6 @@ async def mark_message_as_read(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Marque un message comme lu (pour éviter les notifications en boucle)"""
-    
-    # Vérifier que le message existe
     result = await db.execute(
         select(MentorMessage).where(
             MentorMessage.id == message_id,
@@ -138,18 +215,16 @@ async def mark_message_as_read(
     if not message:
         raise HTTPException(status_code=404, detail="Message introuvable")
     
-    # Vérifier que l'utilisateur est le destinataire
     if message.sender_id == current_user.id:
         raise HTTPException(status_code=403, detail="Vous ne pouvez pas marquer vos propres messages comme lus")
     
-    # Marquer comme lu
     message.is_read = True
     await db.flush()
     
     return {"message": "Message marqué comme lu"}
 
 
-# ========== ENDPOINTS POUR LES SESSIONS ==========
+# ========== SESSIONS ==========
 
 @router.get("/{mentorship_id}/sessions")
 async def get_mentorship_sessions(
@@ -157,8 +232,7 @@ async def get_mentorship_sessions(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Récupère toutes les sessions d'un mentorat"""
-    # Vérifier l'accès au mentorat
+    """Récupère toutes les sessions d'un mentorat (uniquement les futures)"""
     result = await db.execute(
         select(Mentorship).where(Mentorship.id == mentorship_id)
     )
@@ -170,15 +244,17 @@ async def get_mentorship_sessions(
     if mentorship.mentor_id != current_user.id and mentorship.mentee_id != current_user.id:
         raise HTTPException(status_code=403, detail="Accès non autorisé")
     
-    # Récupérer les sessions
+    now = datetime.now(timezone.utc)
     result = await db.execute(
         select(MentoringSession)
-        .where(MentoringSession.mentorship_id == mentorship_id)
+        .where(
+            MentoringSession.mentorship_id == mentorship_id,
+            MentoringSession.scheduled_at >= now
+        )
         .order_by(MentoringSession.scheduled_at)
     )
     sessions = result.scalars().all()
     
-    # Formater la réponse
     output = []
     for session in sessions:
         output.append({
@@ -204,8 +280,8 @@ async def create_mentorship_session(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Crée une nouvelle session de mentorat"""
-    # Vérifier l'accès au mentorat
+    """Crée une nouvelle session de mentorat - ⭐ Seul le mentor peut le faire ⭐"""
+    
     result = await db.execute(
         select(Mentorship).where(Mentorship.id == mentorship_id)
     )
@@ -214,14 +290,13 @@ async def create_mentorship_session(
     if not mentorship:
         raise HTTPException(status_code=404, detail="Mentorat non trouvé")
     
-    if mentorship.mentor_id != current_user.id and mentorship.mentee_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Accès non autorisé")
+    # ⭐ VÉRIFICATION : Seul le mentor peut créer une session ⭐
+    if mentorship.mentor_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Seul le mentor peut planifier une session")
     
-    # Vérifier que la date est dans le futur
     if _ensure_aware(session_data.scheduled_at) <= datetime.now(timezone.utc):
         raise HTTPException(status_code=400, detail="La date de la session doit être dans le futur")
     
-    # Créer la session
     new_session = MentoringSession(
         mentorship_id=mentorship_id,
         scheduled_at=session_data.scheduled_at,
@@ -246,15 +321,15 @@ async def create_mentorship_session(
     }
 
 
-@router.get("/{mentorship_id}/sessions/{session_id}")
-async def get_session_detail(
+@router.delete("/{mentorship_id}/sessions/{session_id}")
+async def delete_session(
     mentorship_id: int,
     session_id: int,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Récupère les détails d'une session spécifique"""
-    # Vérifier l'accès au mentorat
+    """Supprimer une session (uniquement par le mentor)"""
+    
     result = await db.execute(
         select(Mentorship).where(Mentorship.id == mentorship_id)
     )
@@ -266,7 +341,42 @@ async def get_session_detail(
     if mentorship.mentor_id != current_user.id and mentorship.mentee_id != current_user.id:
         raise HTTPException(status_code=403, detail="Accès non autorisé")
     
-    # Récupérer la session
+    result = await db.execute(
+        select(MentoringSession).where(
+            MentoringSession.mentorship_id == mentorship_id,
+            MentoringSession.id == session_id
+        )
+    )
+    session = result.scalar_one_or_none()
+    
+    if not session:
+        raise HTTPException(status_code=404, detail="Session non trouvée")
+    
+    await db.delete(session)
+    await db.commit()
+    
+    return {"message": "Session supprimée avec succès"}
+
+
+@router.get("/{mentorship_id}/sessions/{session_id}")
+async def get_session_detail(
+    mentorship_id: int,
+    session_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Récupère les détails d'une session spécifique"""
+    result = await db.execute(
+        select(Mentorship).where(Mentorship.id == mentorship_id)
+    )
+    mentorship = result.scalar_one_or_none()
+    
+    if not mentorship:
+        raise HTTPException(status_code=404, detail="Mentorat non trouvé")
+    
+    if mentorship.mentor_id != current_user.id and mentorship.mentee_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Accès non autorisé")
+    
     result = await db.execute(
         select(MentoringSession).where(
             MentoringSession.mentorship_id == mentorship_id,
@@ -292,7 +402,7 @@ async def get_session_detail(
     }
 
 
-@router.patch("/{mentorship_id}/sessions/{session_id}")
+@router.patch("//{mentorship_id}/sessions/{session_id}")
 async def update_session(
     mentorship_id: int,
     session_id: int,
@@ -301,7 +411,6 @@ async def update_session(
     db: AsyncSession = Depends(get_db)
 ):
     """Met à jour une session (annuler, reporter, modifier)"""
-    # Vérifier l'accès au mentorat
     result = await db.execute(
         select(Mentorship).where(Mentorship.id == mentorship_id)
     )
@@ -313,7 +422,6 @@ async def update_session(
     if mentorship.mentor_id != current_user.id and mentorship.mentee_id != current_user.id:
         raise HTTPException(status_code=403, detail="Accès non autorisé")
     
-    # Récupérer la session
     result = await db.execute(
         select(MentoringSession).where(
             MentoringSession.mentorship_id == mentorship_id,
@@ -325,7 +433,6 @@ async def update_session(
     if not session:
         raise HTTPException(status_code=404, detail="Session non trouvée")
     
-    # Mettre à jour les champs
     update_data = session_update.dict(exclude_unset=True)
     
     if "status" in update_data:
@@ -359,7 +466,6 @@ async def submit_session_feedback(
     db: AsyncSession = Depends(get_db)
 ):
     """Soumet une évaluation pour une session (par le mentoré)"""
-    # Vérifier l'accès au mentorat
     result = await db.execute(
         select(Mentorship).where(Mentorship.id == mentorship_id)
     )
@@ -368,11 +474,9 @@ async def submit_session_feedback(
     if not mentorship:
         raise HTTPException(status_code=404, detail="Mentorat non trouvé")
     
-    # Seul le mentoré peut évaluer
     if mentorship.mentee_id != current_user.id:
         raise HTTPException(status_code=403, detail="Seul le mentoré peut évaluer la session")
     
-    # Récupérer la session
     result = await db.execute(
         select(MentoringSession).where(
             MentoringSession.mentorship_id == mentorship_id,
@@ -384,19 +488,15 @@ async def submit_session_feedback(
     if not session:
         raise HTTPException(status_code=404, detail="Session non trouvée")
     
-    # Vérifier que la session est passée
     if _ensure_aware(session.scheduled_at) > datetime.now(timezone.utc):
         raise HTTPException(status_code=400, detail="Impossible d'évaluer une session future")
     
-    # Vérifier que la session n'a pas déjà été évaluée
     if session.mentee_rating is not None:
         raise HTTPException(status_code=400, detail="Cette session a déjà été évaluée")
     
-    # Valider la note
     if feedback.rating < 1 or feedback.rating > 5:
         raise HTTPException(status_code=400, detail="La note doit être comprise entre 1 et 5")
     
-    # Mettre à jour le feedback
     session.mentee_rating = float(feedback.rating)
     session.mentee_feedback = feedback.feedback
     session.status = "completed"
@@ -407,3 +507,32 @@ async def submit_session_feedback(
         "message": "Évaluation enregistrée avec succès",
         "rating": feedback.rating
     }
+
+
+# ========== SUPPRIMER UNE CONVERSATION (MENTORAT) ==========
+
+@router.delete("/{mentorship_id}")
+async def delete_mentorship(
+    mentorship_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Supprimer une conversation (mentorat) et tous ses messages"""
+    
+    result = await db.execute(
+        select(Mentorship).where(Mentorship.id == mentorship_id)
+    )
+    mentorship = result.scalar_one_or_none()
+    
+    if not mentorship:
+        raise HTTPException(status_code=404, detail="Conversation introuvable")
+    
+    # Vérifier que l'utilisateur est bien impliqué dans la conversation
+    if mentorship.mentor_id != current_user.id and mentorship.mentee_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Accès non autorisé")
+    
+    # Supprimer le mentorat (les messages et sessions sont supprimés en cascade)
+    await db.delete(mentorship)
+    await db.commit()
+    
+    return {"message": "Conversation supprimée avec succès"}

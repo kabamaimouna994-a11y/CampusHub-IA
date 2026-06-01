@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
-import { Card, StatCard, Tag, Btn, ProgressBar, RingChart, SectionHeader, Input } from '../components/UI.jsx'
-import { clubs, events, mentorat, users } from '../services/api'
+import { Card, StatCard, Tag, Btn, ProgressBar, SectionHeader, Input } from '../components/UI.jsx'
+import { clubs, events, mentorat } from '../services/api'
+import { useAuth } from '../context/AuthContext'
 
 const kc = `
   .clubs-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:13px; }
@@ -37,24 +38,36 @@ const kc = `
     color: var(--muted);
     margin-top: 5px;
   }
-  @media (max-width:900px) { .clubs-grid { grid-template-columns:repeat(2,1fr); } }
+  .form-group { display: flex; flex-direction: column; gap: 8px; margin-bottom: 15px; }
+  .form-group label { font-size: 12px; font-weight: 600; color: var(--muted); }
+  .grid-4 { display: grid; grid-template-columns: repeat(4,1fr); gap: 14px; margin-bottom: 22px; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 22px; }
+  .section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+  @media (max-width:900px) { .clubs-grid { grid-template-columns:repeat(2,1fr); } .grid-4 { grid-template-columns: repeat(2,1fr); } .grid-2 { grid-template-columns: 1fr; } }
   @media (max-width:560px) { .clubs-grid { grid-template-columns:1fr; } }
 `
 
+const categories = ['Tech', 'Design', 'Business', 'Sport', 'Art', 'Science', 'Social', 'Autre']
+
 export default function KPIsCampus({ addToast }) {
+  const { user } = useAuth()
   const [search, setSearch] = useState('')
   const [clubsList, setClubsList] = useState([])
   const [eventsList, setEventsList] = useState([])
   const [mentorshipsList, setMentorshipsList] = useState([])
-  const [totalUsers, setTotalUsers] = useState(0)
   const [loading, setLoading] = useState(true)
-  const [joinedClubs, setJoinedClubs] = useState(new Set())
+  const [showCreateForm, setShowCreateForm] = useState(false)
+  const [newClub, setNewClub] = useState({
+    name: '',
+    description: '',
+    category: 'Autre',
+    icon: '🏛️'
+  })
   const [realStats, setRealStats] = useState({
     totalClubs: 0,
     totalMembers: 0,
     totalEvents: 0,
     totalMentorships: 0,
-    totalUsers: 0,
     avgAttendance: 0
   })
 
@@ -65,10 +78,9 @@ export default function KPIsCampus({ addToast }) {
   const fetchData = async () => {
     setLoading(true)
     try {
-      // Récupérer les données réelles
       const [clubsRes, eventsRes, mentorshipsRes] = await Promise.all([
         clubs.getAll(),
-        events.getAll(),
+        events.getAll().catch(() => ({ data: [] })),
         mentorat.getAll().catch(() => ({ data: [] }))
       ])
       
@@ -80,13 +92,11 @@ export default function KPIsCampus({ addToast }) {
       setEventsList(eventsData)
       setMentorshipsList(mentorshipsData)
       
-      // Calculer les stats réelles
-      const totalMembers = clubsData.reduce((sum, club) => sum + (club.members_count || 0), 0)
+      const totalMembers = clubsData.reduce((sum, club) => sum + (club.member_count || 0), 0)
       const totalEvents = eventsData.length
       const totalMentorships = mentorshipsData.length
       const totalClubs = clubsData.length
       
-      // Calculer le taux de participation moyen
       const avgAttendance = eventsData.length > 0 
         ? Math.round(eventsData.reduce((sum, e) => sum + (e.fill_rate || 0), 0) / eventsData.length)
         : 0
@@ -96,7 +106,6 @@ export default function KPIsCampus({ addToast }) {
         totalMembers,
         totalEvents,
         totalMentorships,
-        totalUsers: totalMembers,
         avgAttendance
       })
       
@@ -108,18 +117,40 @@ export default function KPIsCampus({ addToast }) {
     }
   }
 
-  const joinClub = async (clubId, clubName) => {
-    if (joinedClubs.has(clubId)) {
-      addToast('⚠️', 'Déjà membre', `Vous êtes déjà membre de ${clubName}`)
+  const createClub = async () => {
+    if (!newClub.name.trim()) {
+      addToast('⚠️', 'Erreur', 'Le nom du club est requis')
       return
     }
     try {
+      await clubs.create(newClub)
+      addToast('✅', 'Club créé !', `${newClub.name} a été créé avec succès`)
+      setShowCreateForm(false)
+      setNewClub({ name: '', description: '', category: 'Autre', icon: '🏛️' })
+      fetchData()
+    } catch (error) {
+      console.error('Erreur création:', error)
+      addToast('❌', 'Erreur', error.response?.data?.detail || 'Impossible de créer le club')
+    }
+  }
+
+  const joinClub = async (clubId, clubName) => {
+    try {
       await clubs.join(clubId)
-      setJoinedClubs(prev => new Set([...prev, clubId]))
       addToast('✅', 'Club rejoint !', `Vous avez rejoint ${clubName}`)
-      fetchData() // Recharger pour mettre à jour les stats
+      fetchData()
     } catch (error) {
       addToast('❌', 'Erreur', error.response?.data?.detail || "Impossible de rejoindre le club")
+    }
+  }
+
+  const leaveClub = async (clubId, clubName) => {
+    try {
+      await clubs.leave(clubId)
+      addToast('👋', 'Club quitté', `Vous avez quitté ${clubName}`)
+      fetchData()
+    } catch (error) {
+      addToast('❌', 'Erreur', error.response?.data?.detail || "Impossible de quitter le club")
     }
   }
 
@@ -138,11 +169,42 @@ export default function KPIsCampus({ addToast }) {
       <SectionHeader
         title="📊 KPIs Campus"
         sub="Tableau de bord clubs et associations - DONNÉES RÉELLES"
-        action={<Btn variant="secondary" onClick={fetchData}>🔄 Actualiser les données</Btn>}
+        action={
+          <div style={{ display: 'flex', gap: 10 }}>
+            <Btn onClick={() => setShowCreateForm(!showCreateForm)}>
+              {showCreateForm ? 'Annuler' : '+ Créer un club'}
+            </Btn>
+            <Btn variant="secondary" onClick={fetchData}>🔄 Actualiser</Btn>
+          </div>
+        }
       />
 
-      {/* Stats avec VRAIES données */}
-      <div className="grid-4" style={{ marginBottom: 22 }}>
+      {showCreateForm && (
+        <Card style={{ marginBottom: 20 }}>
+          <div style={{ marginBottom: 15, fontWeight: 700, fontSize: 14 }}>🏛️ Créer un nouveau club</div>
+          <div className="form-group">
+            <label>Nom du club *</label>
+            <input className="input" placeholder="Ex: Club IA, Bureau des Arts..." value={newClub.name} onChange={e => setNewClub({...newClub, name: e.target.value})} />
+          </div>
+          <div className="form-group">
+            <label>Description</label>
+            <textarea className="input" placeholder="Décrivez l'objectif du club..." rows={3} value={newClub.description} onChange={e => setNewClub({...newClub, description: e.target.value})} />
+          </div>
+          <div className="form-group">
+            <label>Catégorie</label>
+            <select className="input" value={newClub.category} onChange={e => setNewClub({...newClub, category: e.target.value})}>
+              {categories.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+          <div className="form-group">
+            <label>Icône (emoji)</label>
+            <input className="input" placeholder="🏛️" value={newClub.icon} onChange={e => setNewClub({...newClub, icon: e.target.value})} />
+          </div>
+          <Btn onClick={createClub}>🎉 Créer le club</Btn>
+        </Card>
+      )}
+
+      <div className="grid-4">
         <StatCard 
           icon="👥" 
           value={realStats.totalMembers} 
@@ -173,13 +235,12 @@ export default function KPIsCampus({ addToast }) {
         />
       </div>
 
-      {/* KPIs globaux avec VRAIES données */}
-      <div className="grid-2" style={{ marginBottom: 22 }}>
+      <div className="grid-2">
         <Card title="🎯 KPIs globaux (données réelles)">
           <div className="kpi-grid">
             <div className="stat-real">
-              <div className="stat-real-value">{Math.min(100, Math.round((realStats.totalUsers / 100) * 100))}%</div>
-              <div className="stat-real-label">Taux d'adoption<br/><small>(sur {realStats.totalUsers} utilisateurs)</small></div>
+              <div className="stat-real-value">{Math.min(100, Math.round((realStats.totalMembers / 50) * 100))}%</div>
+              <div className="stat-real-label">Taux d'adoption<br/><small>(sur {realStats.totalMembers} utilisateurs)</small></div>
             </div>
             <div className="stat-real">
               <div className="stat-real-value">{realStats.avgAttendance}%</div>
@@ -197,15 +258,15 @@ export default function KPIsCampus({ addToast }) {
         </Card>
 
         <Card title="🏆 Top clubs (par nombre de membres)">
-          {clubsList.sort((a, b) => (b.members_count || 0) - (a.members_count || 0)).slice(0, 4).map(c => (
+          {clubsList.sort((a, b) => (b.member_count || 0) - (a.member_count || 0)).slice(0, 4).map(c => (
             <div key={c.id} className="list-item">
               <span style={{ fontSize: 18 }}>{c.icon || '🏛️'}</span>
               <div style={{ flex: 1 }}>
                 <div style={{ fontWeight: 600, fontSize: 12 }}>{c.name}</div>
-                <div style={{ fontSize: 10, color: 'var(--muted)' }}>{c.members_count || 0} membres</div>
+                <div style={{ fontSize: 10, color: 'var(--muted)' }}>{c.member_count || 0} membres</div>
               </div>
               <div style={{ textAlign: 'right' }}>
-                <Tag color="green">+{Math.round((c.members_count || 0) * 0.15)}%</Tag>
+                <Tag color="green">+{Math.round((c.member_count || 0) * 0.15)}%</Tag>
               </div>
             </div>
           ))}
@@ -217,7 +278,6 @@ export default function KPIsCampus({ addToast }) {
         </Card>
       </div>
 
-      {/* Tous les clubs */}
       <div className="section-header">
         <div><div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16 }}>🏛️ Tous les clubs ({realStats.totalClubs})</div></div>
         <Input icon="🔍" placeholder="Rechercher un club…" value={search} onChange={e => setSearch(e.target.value)} style={{ width: 220 }} />
@@ -230,17 +290,17 @@ export default function KPIsCampus({ addToast }) {
             <div className="club-name">{c.name}</div>
             <div className="club-desc">{c.description?.substring(0, 100)}...</div>
             <div className="club-stats">
-              <div className="cstat"><strong>{c.members_count || 0}</strong>membres</div>
+              <div className="cstat"><strong>{c.member_count || 0}</strong>membres</div>
               <div className="cstat"><strong>{c.events_count || 0}</strong>événements</div>
             </div>
-            <ProgressBar value={Math.min(100, (c.members_count || 0) * 2)} color="var(--accent)" />
+            <ProgressBar value={Math.min(100, (c.member_count || 0) * 2)} color="var(--accent)" />
             <Btn
-              variant={joinedClubs.has(c.id) ? 'secondary' : 'primary'}
+              variant={c.is_member ? 'secondary' : 'primary'}
               size="sm"
               style={{ marginTop: 11, width: '100%' }}
-              onClick={() => joinClub(c.id, c.name)}
+              onClick={() => c.is_member ? leaveClub(c.id, c.name) : joinClub(c.id, c.name)}
             >
-              {joinedClubs.has(c.id) ? '✓ Membre' : 'Rejoindre'}
+              {c.is_member ? '✓ Membre' : 'Rejoindre'}
             </Btn>
           </div>
         ))}

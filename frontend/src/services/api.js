@@ -9,7 +9,7 @@ const api = axios.create({
     'Content-Type': 'application/json',
   },
   timeout: 30000,
-  withCredentials: false,  // Important pour CORS
+  withCredentials: false,
 });
 
 api.interceptors.request.use(
@@ -109,6 +109,7 @@ export const matching = {
   getMentors: (params = {}) => api.get('/api/matching/mentors', { params }),
   applyToProject: (projectId, message = null) =>
     api.post(`/api/matching/projects/${projectId}/apply`, message ? { message } : {}),
+  createProject: (data) => api.post('/api/matching/projects', data),
 };
 
 export const mentorat = {
@@ -143,6 +144,20 @@ export const events = {
 export const admin = {
   getDashboard: () => api.get('/api/admin/dashboard'),
   getUsers: () => api.get('/api/admin/users'),
+};
+
+// ⭐ CERTIFICATIONS - AJOUT ⭐
+export const certifications = {
+  getAll: () => api.get('/api/certifications'),
+  create: (data) => api.post('/api/certifications', data),
+  uploadFile: (file) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return api.post('/api/certifications/upload', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    });
+  },
+  delete: (id) => api.delete(`/api/certifications/${id}`),
 };
 
 export default api;

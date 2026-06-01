@@ -135,12 +135,29 @@ const ml = `
     max-width: 400px;
     border: 1px solid var(--border);
   }
+  .btn-icon {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 14px;
+    color: var(--muted);
+    padding: 4px 8px;
+    border-radius: 4px;
+    transition: all 0.2s;
+  }
+  .btn-icon:hover {
+    color: var(--orange);
+    background: rgba(251,146,60,0.1);
+  }
   @keyframes spin { to { transform: rotate(360deg); } }
   @media (max-width: 700px) { .mentors-grid { grid-template-columns: 1fr; } .chat-wrapper { flex-direction: column; height: auto; } .chat-list { width: 100%; height: 120px; display: flex; overflow-x: auto; flex-direction: row; } .chat-li { flex-direction: column; min-width: 80px; } .search-box { flex-direction: column; } }
 `
 
 const YEAR_LEVELS = ['B1', 'B2', 'B3', 'M1', 'M2']
 const LEVEL_COLOR = { B1: '#fbbf24', B2: '#fb923c', B3: '#34d399', M1: '#a78bfa', M2: '#4f7cff' }
+
+// ⭐ ORDRE DES NIVEAUX POUR LE MENTORAT ⭐
+const LEVEL_ORDER = { "B1": 1, "B2": 2, "B3": 3, "M1": 4, "M2": 5 }
 
 export default function MentorLoop({ addToast }) {
   const { user } = useAuth()
@@ -302,6 +319,53 @@ export default function MentorLoop({ addToast }) {
     }
   }
 
+  // Supprimer une session
+  const deleteSession = async (sessionId, mentorshipId, sessionTopic) => {
+    if (window.confirm(`Supprimer la session "${sessionTopic || 'sans titre'}" ?`)) {
+      try {
+        await api.delete(`/api/mentorat/${mentorshipId}/sessions/${sessionId}`)
+        addToast('🗑️', 'Session supprimée', 'La session a été supprimée')
+        loadAllSessions()
+      } catch (error) {
+        console.error('Erreur suppression:', error)
+        addToast('❌', 'Erreur', error.response?.data?.detail || 'Impossible de supprimer la session')
+      }
+    }
+  }
+
+  // ⭐ Supprimer une conversation (mentorat)
+  const deleteConversation = async (mentorshipId, partnerName) => {
+    if (window.confirm(`Supprimer la conversation avec ${partnerName} ?\n\nTous les messages seront définitivement supprimés.`)) {
+      try {
+        await api.delete(`/api/mentorat/${mentorshipId}`)
+        addToast('🗑️', 'Conversation supprimée', `La conversation avec ${partnerName} a été supprimée`)
+        
+        // Nettoyer l'état local
+        setMessages(prev => {
+          const newMessages = { ...prev }
+          delete newMessages[mentorshipId]
+          return newMessages
+        })
+        
+        // Recharger les mentorats
+        await loadMentorships()
+        
+        // Si la conversation supprimée était active, réinitialiser
+        if (currentMentorship === mentorshipId) {
+          setCurrentMentorship(null)
+          setMsgInput('')
+        }
+        
+        // Recharger les sessions
+        await loadAllSessions()
+        
+      } catch (error) {
+        console.error('Erreur suppression:', error)
+        addToast('❌', 'Erreur', error.response?.data?.detail || 'Impossible de supprimer la conversation')
+      }
+    }
+  }
+
   // Soumettre un feedback
   const submitFeedback = async () => {
     if (feedbackRating === 0) {
@@ -425,7 +489,17 @@ export default function MentorLoop({ addToast }) {
     return mentorship && mentorship.status === 'pending'
   }
 
-  const createMentorship = async (mentorId, mentorName) => {
+  const createMentorship = async (mentorId, mentorName, mentorLevel) => {
+    const userLevel = user?.year_level || "B1"
+    const userOrder = LEVEL_ORDER[userLevel]
+    const mentorOrder = LEVEL_ORDER[mentorLevel]
+    
+    // Vérification de la hiérarchie côté frontend
+    if (mentorOrder <= userOrder) {
+      addToast('⚠️', 'Hiérarchie incorrecte', `Un mentor doit avoir un niveau supérieur. Votre niveau: ${userLevel} → Mentor: ${mentorLevel}`)
+      return
+    }
+    
     if (hasContactedMentor(mentorId)) {
       if (isRequestPending(mentorId)) {
         if (addToast) addToast('⏳', 'Demande déjà envoyée', `Vous avez déjà contacté ${mentorName}. Veuillez attendre sa réponse.`)
@@ -698,35 +772,60 @@ export default function MentorLoop({ addToast }) {
           <Card style={{ marginBottom: 16 }}>
             <div className="card-title">🔗 Hiérarchie des niveaux de mentorat</div>
             <div className="level-bar">
-              {YEAR_LEVELS.map((y, i) => (
-                <div key={y} style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                  <div className="level-pill" style={{ background: `${LEVEL_COLOR[y]}18`, border: `1px solid ${LEVEL_COLOR[y]}30`, color: LEVEL_COLOR[y] }}>{y}</div>
-                  {i < YEAR_LEVELS.length - 1 && <span className="arrow-sep">→</span>}
-                </div>
-              ))}
+              {YEAR_LEVELS.map((level, idx, arr) => {
+                const userLevel = user?.year_level || "B1"
+                const isUserLevel = level === userLevel
+                const isHigher = LEVEL_ORDER[level] > LEVEL_ORDER[userLevel]
+                
+                return (
+                  <div key={level} style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                    <div 
+                      className="level-pill" 
+                      style={{ 
+                        background: isUserLevel ? 'rgba(79,124,255,0.2)' : (isHigher ? 'rgba(52,211,153,0.1)' : 'var(--surface2)'),
+                        border: isUserLevel ? '2px solid var(--accent)' : '1px solid var(--border)',
+                        color: isUserLevel ? 'var(--accent)' : (isHigher ? 'var(--green)' : 'var(--muted)')
+                      }}
+                    >
+                      {level}
+                      {isUserLevel && ' 👈 votre niveau'}
+                      {!isUserLevel && isHigher && ' ✅'}
+                    </div>
+                    {idx < arr.length - 1 && <span className="arrow-sep">→</span>}
+                  </div>
+                )
+              })}
             </div>
-            <div className="search-box">
-              <Input
-                icon="🔍"
-                placeholder="Rechercher par nom, matière ou spécialité..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="search-input"
-              />
-              <Btn onClick={loadAllMentors} disabled={isSearching}>
-                {isSearching ? 'Recherche...' : 'Rechercher'}
-              </Btn>
+            <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 10 }}>
+              📌 Vous pouvez uniquement être mentoré par des étudiants de niveau supérieur.
+              {user?.year_level === 'M2' && " Vous êtes au niveau maximum, vous ne pouvez plus avoir de mentor."}
             </div>
           </Card>
+
+          <div className="search-box">
+            <Input
+              icon="🔍"
+              placeholder="Rechercher par nom, matière ou spécialité..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="search-input"
+            />
+            <Btn onClick={loadAllMentors} disabled={isSearching}>
+              {isSearching ? 'Recherche...' : 'Rechercher'}
+            </Btn>
+          </div>
 
           {isSearching ? (
             <div className="search-loading">
               <div className="spinner"></div>
               <span>Recherche de mentors en cours...</span>
             </div>
-          ) : filteredMentors.length === 0 ? (
+          ) : filteredMentors.filter(m => {
+            const userLevel = user?.year_level || "B1"
+            return LEVEL_ORDER[m.year_level] > LEVEL_ORDER[userLevel]
+          }).length === 0 ? (
             <Card style={{ textAlign: 'center', padding: 40 }}>
-              <div>🎓 Aucun mentor trouvé</div>
+              <div>🎓 Aucun mentor disponible (niveau supérieur requis)</div>
               <Btn variant="secondary" style={{ marginTop: 16 }} onClick={() => setShowMentorForm(true)}>
                 👑 Devenir mentor vous-même
               </Btn>
@@ -734,8 +833,12 @@ export default function MentorLoop({ addToast }) {
           ) : (
             <div className="mentors-grid">
               {filteredMentors.map(m => {
+                const userLevel = user?.year_level || "B1"
                 const alreadyContacted = hasContactedMentor(m.mentor_id)
                 const isPending = isRequestPending(m.mentor_id)
+                
+                // Ne pas afficher les mentors de niveau inférieur ou égal
+                if (LEVEL_ORDER[m.year_level] <= LEVEL_ORDER[userLevel]) return null
 
                 return (
                   <div key={m.mentor_id} className="mentor-card">
@@ -760,7 +863,7 @@ export default function MentorLoop({ addToast }) {
                           </span>
                         ) : (
                           m.is_available && (
-                            <Btn size="sm" onClick={() => createMentorship(m.mentor_id, m.mentor_name)}>
+                            <Btn size="sm" onClick={() => createMentorship(m.mentor_id, m.mentor_name, m.year_level)}>
                               Contacter
                             </Btn>
                           )
@@ -797,6 +900,18 @@ export default function MentorLoop({ addToast }) {
                   </div>
                 </div>
                 {conversationsWithUnread[m.id] && <div className="unread-dot" />}
+                
+                {/* ⭐ Bouton supprimer la conversation ⭐ */}
+                <button
+                  className="btn-icon"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    deleteConversation(m.id, m.partner_name)
+                  }}
+                  title="Supprimer la conversation"
+                >
+                  🗑️
+                </button>
               </div>
             ))}
             {mentorships.length === 0 && (
@@ -814,7 +929,6 @@ export default function MentorLoop({ addToast }) {
                   {currentMentorship ? mentorships.find(m => m.id === currentMentorship)?.partner_name || 'Conversation' : 'Sélectionnez une conversation'}
                 </div>
               </div>
-              {/* UNIQUEMENT LE BOUTON NOTER - PLUS DE BOUTON PLANIFIER */}
               {currentMentorship && mentorships.find(m => m.id === currentMentorship)?.role === 'mentoré' && (
                 <Btn size="sm" variant="secondary" onClick={() => openRatingModal(mentorships.find(m => m.id === currentMentorship))}>
                   ⭐ Noter le mentor
@@ -874,97 +988,114 @@ export default function MentorLoop({ addToast }) {
         </div>
       )}
 
-      {/* ONGLET SESSIONS - UNIQUE ENDROIT POUR PLANIFIER */}
+      {/* ONGLET SESSIONS - UNIQUE ENDROIT POUR PLANIFIER (UNIQUEMENT POUR LES MENTORS) */}
       {activeTab === 'sessions' && (
         <div>
-          {/* Sélection du mentorat */}
+          {/* Sélection du mentorat - Uniquement ceux où l'utilisateur est mentor */}
           <Card style={{ marginBottom: 20 }}>
-            <div style={{ marginBottom: 15, fontWeight: 700, fontSize: 14 }}>👥 Sélectionner un mentorat</div>
+            <div style={{ marginBottom: 15, fontWeight: 700, fontSize: 14 }}>👥 Sélectionner un mentorat (en tant que mentor)</div>
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-              {mentorships.filter(m => m.status !== 'pending').map(m => (
-                <button
-                  key={m.id}
-                  onClick={() => setSelectedMentorshipForSession(m.id)}
-                  style={{
-                    padding: '8px 16px',
-                    borderRadius: '8px',
-                    border: selectedMentorshipForSession === m.id ? '2px solid var(--accent)' : '1px solid var(--border)',
-                    background: selectedMentorshipForSession === m.id ? 'var(--accent)' : 'var(--surface)',
-                    color: selectedMentorshipForSession === m.id ? 'white' : 'var(--text)',
-                    cursor: 'pointer'
-                  }}
-                >
-                  {m.partner_name} ({m.role === 'mentor' ? 'Mentor' : 'Mentoré'})
-                </button>
-              ))}
+              {mentorships
+                .filter(m => m.status !== 'pending' && m.role === 'mentor')
+                .map(m => (
+                  <button
+                    key={m.id}
+                    onClick={() => setSelectedMentorshipForSession(m.id)}
+                    style={{
+                      padding: '8px 16px',
+                      borderRadius: '8px',
+                      border: selectedMentorshipForSession === m.id ? '2px solid var(--accent)' : '1px solid var(--border)',
+                      background: selectedMentorshipForSession === m.id ? 'var(--accent)' : 'var(--surface)',
+                      color: selectedMentorshipForSession === m.id ? 'white' : 'var(--text)',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    {m.partner_name} (mentoré)
+                  </button>
+                ))}
             </div>
-            {mentorships.filter(m => m.status !== 'pending').length === 0 && (
+            {mentorships.filter(m => m.status !== 'pending' && m.role === 'mentor').length === 0 && (
               <div style={{ color: 'var(--muted)', marginTop: 10 }}>
-                Aucun mentorat actif. Commencez par contacter un mentor dans l'onglet "Rechercher un mentor"
+                Vous n'êtes actuellement mentor d'aucun étudiant.
               </div>
             )}
           </Card>
 
-          {/* Formulaire de planification */}
+          {/* Formulaire de planification (visible uniquement pour les mentors) */}
           {selectedMentorshipForSession ? (
-            <Card style={{ marginBottom: 20 }}>
-              <div style={{ marginBottom: 15, fontWeight: 700, fontSize: 14 }}>
-                📅 Planifier une session avec {mentorships.find(m => m.id === selectedMentorshipForSession)?.partner_name}
-              </div>
-              <div className="form-group">
-                <label>Date et heure *</label>
-                <input 
-                  type="datetime-local" 
-                  className="input" 
-                  value={newSession.scheduled_at} 
-                  onChange={e => setNewSession({...newSession, scheduled_at: e.target.value})} 
-                />
-              </div>
-              <div className="form-group">
-                <label>Durée (minutes)</label>
-                <select 
-                  className="input" 
-                  value={newSession.duration_min} 
-                  onChange={e => setNewSession({...newSession, duration_min: e.target.value})}
-                >
-                  <option value="30">30 minutes</option>
-                  <option value="60">1 heure</option>
-                  <option value="90">1h30</option>
-                  <option value="120">2 heures</option>
-                </select>
-              </div>
-              <div className="form-group">
-                <label>Lieu (ou lien visio)</label>
-                <input 
-                  className="input" 
-                  placeholder="Ex: Salle 204, Google Meet, Zoom..." 
-                  value={newSession.location} 
-                  onChange={e => setNewSession({...newSession, location: e.target.value})} 
-                />
-              </div>
-              <div className="form-group">
-                <label>Sujet</label>
-                <input 
-                  className="input" 
-                  placeholder="Ex: Révision Python, Aide sur le projet..." 
-                  value={newSession.topic} 
-                  onChange={e => setNewSession({...newSession, topic: e.target.value})} 
-                />
-              </div>
-              <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
-                <Btn variant="secondary" onClick={() => {
-                  setSelectedMentorshipForSession(null)
-                  setNewSession({ scheduled_at: '', duration_min: 60, location: '', topic: '' })
-                }}>
-                  Annuler
-                </Btn>
-                <Btn onClick={createSession}>📅 Planifier la session</Btn>
-              </div>
-            </Card>
+            (() => {
+              const mentorship = mentorships.find(m => m.id === selectedMentorshipForSession)
+              const isMentor = mentorship?.role === 'mentor'
+              
+              return isMentor ? (
+                <Card style={{ marginBottom: 20 }}>
+                  <div style={{ marginBottom: 15, fontWeight: 700, fontSize: 14 }}>
+                    📅 Planifier une session avec {mentorship?.partner_name}
+                  </div>
+                  <div className="form-group">
+                    <label>Date et heure *</label>
+                    <input 
+                      type="datetime-local" 
+                      className="input" 
+                      value={newSession.scheduled_at} 
+                      onChange={e => setNewSession({...newSession, scheduled_at: e.target.value})} 
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>Durée (minutes)</label>
+                    <select 
+                      className="input" 
+                      value={newSession.duration_min} 
+                      onChange={e => setNewSession({...newSession, duration_min: e.target.value})}
+                    >
+                      <option value="30">30 minutes</option>
+                      <option value="60">1 heure</option>
+                      <option value="90">1h30</option>
+                      <option value="120">2 heures</option>
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label>Lieu (ou lien visio)</label>
+                    <input 
+                      className="input" 
+                      placeholder="Ex: Salle 204, Google Meet, Zoom..." 
+                      value={newSession.location} 
+                      onChange={e => setNewSession({...newSession, location: e.target.value})} 
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>Sujet</label>
+                    <input 
+                      className="input" 
+                      placeholder="Ex: Révision Python, Aide sur le projet..." 
+                      value={newSession.topic} 
+                      onChange={e => setNewSession({...newSession, topic: e.target.value})} 
+                    />
+                  </div>
+                  <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+                    <Btn variant="secondary" onClick={() => {
+                      setSelectedMentorshipForSession(null)
+                      setNewSession({ scheduled_at: '', duration_min: 60, location: '', topic: '' })
+                    }}>
+                      Annuler
+                    </Btn>
+                    <Btn onClick={createSession}>📅 Planifier la session</Btn>
+                  </div>
+                </Card>
+              ) : (
+                <Card style={{ marginBottom: 20, textAlign: 'center', padding: 30, background: 'rgba(251,146,60,0.1)' }}>
+                  <div style={{ fontSize: 40, marginBottom: 12 }}>⚠️</div>
+                  <div>Vous n'êtes pas le mentor de cette relation.</div>
+                  <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>
+                    Seul le mentor peut planifier des sessions.
+                  </div>
+                </Card>
+              )
+            })()
           ) : (
             <Card style={{ marginBottom: 20, textAlign: 'center', padding: 30 }}>
               <div style={{ fontSize: 40, marginBottom: 12 }}>📅</div>
-              <div>Sélectionnez un mentorat ci-dessus pour planifier une session</div>
+              <div>Sélectionnez un mentorat (en tant que mentor) pour planifier une session</div>
             </Card>
           )}
 
@@ -979,11 +1110,13 @@ export default function MentorLoop({ addToast }) {
               sessions.map(session => {
                 const isPast = new Date(session.scheduled_at) < new Date()
                 const canGiveFeedback = isPast && session.status === 'scheduled' && session.role === 'mentoré' && !session.mentee_rating
+                const isCreator = session.role === 'mentor'
                 
                 return (
                   <div key={session.id} className="session-card">
                     <div className="session-date">
                       {new Date(session.scheduled_at).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}
+                      {isPast && <Tag color="orange" style={{ marginLeft: 8 }}>Passée</Tag>}
                     </div>
                     <div className="session-topic">{session.topic || 'Session de mentorat'}</div>
                     <div className="session-location">
@@ -991,19 +1124,26 @@ export default function MentorLoop({ addToast }) {
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 10 }}>
                       <div>
-                        <Tag color={session.status === 'scheduled' ? 'green' : 'orange'}>
-                          {session.status === 'scheduled' ? 'À venir' : session.status}
+                        <Tag color={session.status === 'scheduled' ? (isPast ? 'orange' : 'green') : 'orange'}>
+                          {session.status === 'scheduled' ? (isPast ? 'Passée' : 'À venir') : session.status}
                         </Tag>
                         {session.mentee_rating && <Tag color="purple" style={{ marginLeft: 8 }}>⭐ Notée</Tag>}
                       </div>
-                      {canGiveFeedback && (
-                        <Btn size="sm" onClick={() => {
-                          setSelectedSession(session)
-                          setShowFeedbackModal(true)
-                        }}>
-                          📝 Évaluer
-                        </Btn>
-                      )}
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        {canGiveFeedback && (
+                          <Btn size="sm" onClick={() => {
+                            setSelectedSession(session)
+                            setShowFeedbackModal(true)
+                          }}>
+                            📝 Évaluer
+                          </Btn>
+                        )}
+                        {isCreator && (
+                          <Btn size="sm" variant="secondary" onClick={() => deleteSession(session.id, session.mentorship_id, session.topic)}>
+                            🗑️ Supprimer
+                          </Btn>
+                        )}
+                      </div>
                     </div>
                   </div>
                 )

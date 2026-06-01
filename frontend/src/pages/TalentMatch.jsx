@@ -91,12 +91,14 @@ export default function TalentMatch({ addToast }) {
       return
     }
     try {
-      const skillsList = newProject.required_skills.split(',').filter(s => s.trim()).map(s => ({ 
-        name: s.trim(), 
-        level: 'intermédiaire' 
-      }))
+      // Transformer les compétences en liste de strings (pas d'objets)
+      const skillsList = newProject.required_skills
+        .split(',')
+        .filter(s => s.trim())
+        .map(s => s.trim())
       
-      await api.post('/api/projects/', {
+      // ⭐ CORRECTION : Utiliser matching.createProject au lieu de api.post
+      await matching.createProject({
         title: newProject.title,
         description: newProject.description,
         type: newProject.type,
@@ -104,6 +106,7 @@ export default function TalentMatch({ addToast }) {
         max_members: parseInt(newProject.max_members),
         required_hours_per_week: parseInt(newProject.required_hours_per_week)
       })
+      
       addToast('✅', 'Projet créé !', `${newProject.title} a été publié`)
       setShowCreateForm(false)
       setNewProject({
@@ -199,7 +202,9 @@ export default function TalentMatch({ addToast }) {
               <div className="project-title">{p.project_title}</div>
               <div className="project-desc">{p.project_description?.substring(0, 120)}...</div>
               <div className="project-skills">
-                {(p.required_skills || []).slice(0, 4).map(s => <Tag key={s.name}>{s.name}</Tag>)}
+                {(p.required_skills || []).slice(0, 4).map((s, idx) => (
+                  <Tag key={idx}>{typeof s === 'string' ? s : s.name}</Tag>
+                ))}
               </div>
               <div style={{ marginBottom: 12 }}>
                 <ProgressBar value={p.score_percent || 0} color={c.line} />

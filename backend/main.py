@@ -4,7 +4,7 @@ from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 
 from core.database import create_tables
-from routers import auth, users, skills, matching, mentorat, clubs, events, admin
+from routers import auth, users, skills, matching, mentorat, clubs, events, admin, certifications
 
 
 @asynccontextmanager
@@ -48,6 +48,7 @@ app.include_router(mentorat.router, prefix="/api/mentorat", tags=["MentorLoop"])
 app.include_router(clubs.router, prefix="/api/clubs", tags=["KPIs Campus"])
 app.include_router(events.router, prefix="/api/events", tags=["EventBoost"])
 app.include_router(admin.router, prefix="/api/admin", tags=["Administration"])
+app.include_router(certifications.router, prefix="/api/certifications", tags=["Certifications"])
 
 
 @app.get("/")
