@@ -1,0 +1,4 @@
+[flake8]
+exclude = venv,.venv,env,__pycache__,alembic
+max-line-length = 150
+ignore = E501,W291,W292,W293,E302,E402,F401,F821,F541,E712,E203,E128,E131,E701,E999,F841,E722,F405,E226
