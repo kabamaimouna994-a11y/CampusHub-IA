@@ -149,6 +149,21 @@ const ml = `
     color: var(--orange);
     background: rgba(251,146,60,0.1);
   }
+  .btn-accept {
+    background: var(--green);
+    color: white;
+    border: none;
+    padding: 4px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 600;
+    margin-left: 8px;
+  }
+  .btn-accept:hover {
+    background: #2b9e6e;
+    transform: translateY(-1px);
+  }
   @keyframes spin { to { transform: rotate(360deg); } }
   @media (max-width: 700px) { .mentors-grid { grid-template-columns: 1fr; } .chat-wrapper { flex-direction: column; height: auto; } .chat-list { width: 100%; height: 120px; display: flex; overflow-x: auto; flex-direction: row; } .chat-li { flex-direction: column; min-width: 80px; } .search-box { flex-direction: column; } }
 `
@@ -216,6 +231,7 @@ export default function MentorLoop({ addToast }) {
     pollingRef.current = setInterval(() => {
       if (document.visibilityState === 'visible') {
         checkNewMessages()
+        loadMentorships() // Recharger les mentorats pour mettre à jour les statuts
       }
     }, 5000)
 
@@ -244,6 +260,29 @@ export default function MentorLoop({ addToast }) {
     }
   }, [searchTerm, allMentors])
 
+  // ⭐ NOUVEAU : Accepter une demande de mentorat
+  const acceptMentorship = async (mentorshipId, partnerName) => {
+    try {
+      const response = await api.put(`/api/mentorat/${mentorshipId}/accept`)
+      console.log('Acceptation réponse:', response)
+      
+      addToast('✅', 'Demande acceptée', `Vous êtes maintenant mentor de ${partnerName}`)
+      
+      // Recharger toutes les données
+      await loadMentorships()
+      await loadAllSessions()
+      
+      // Si on est dans l'onglet sessions, rafraîchir l'affichage
+      if (activeTab === 'sessions') {
+        setSelectedMentorshipForSession(mentorshipId)
+      }
+      
+    } catch (error) {
+      console.error('Erreur acceptation:', error)
+      addToast('❌', 'Erreur', error.response?.data?.detail || "Impossible d'accepter la demande")
+    }
+  }
+
   // Charger toutes les sessions
   const loadAllSessions = async () => {
     try {
@@ -259,6 +298,8 @@ export default function MentorLoop({ addToast }) {
       
       for (const mentorship of mentorshipsList) {
         if (!mentorship || !mentorship.id) continue
+        // ⭐ Inclure les mentorats actifs seulement pour les sessions
+        if (mentorship.status !== 'active') continue
         
         try {
           const sessionsRes = await mentorat.getSessions(mentorship.id)
@@ -333,30 +374,26 @@ export default function MentorLoop({ addToast }) {
     }
   }
 
-  // ⭐ Supprimer une conversation (mentorat)
+  // Supprimer une conversation (mentorat)
   const deleteConversation = async (mentorshipId, partnerName) => {
     if (window.confirm(`Supprimer la conversation avec ${partnerName} ?\n\nTous les messages seront définitivement supprimés.`)) {
       try {
         await api.delete(`/api/mentorat/${mentorshipId}`)
         addToast('🗑️', 'Conversation supprimée', `La conversation avec ${partnerName} a été supprimée`)
         
-        // Nettoyer l'état local
         setMessages(prev => {
           const newMessages = { ...prev }
           delete newMessages[mentorshipId]
           return newMessages
         })
         
-        // Recharger les mentorats
         await loadMentorships()
         
-        // Si la conversation supprimée était active, réinitialiser
         if (currentMentorship === mentorshipId) {
           setCurrentMentorship(null)
           setMsgInput('')
         }
         
-        // Recharger les sessions
         await loadAllSessions()
         
       } catch (error) {
@@ -448,6 +485,7 @@ export default function MentorLoop({ addToast }) {
   const loadMentorships = async () => {
     try {
       const res = await mentorat.getAll()
+      console.log('Mentorats chargés:', res.data) // Debug
       setMentorships(res.data || [])
 
       const pending = {}
@@ -494,7 +532,6 @@ export default function MentorLoop({ addToast }) {
     const userOrder = LEVEL_ORDER[userLevel]
     const mentorOrder = LEVEL_ORDER[mentorLevel]
     
-    // Vérification de la hiérarchie côté frontend
     if (mentorOrder <= userOrder) {
       addToast('⚠️', 'Hiérarchie incorrecte', `Un mentor doit avoir un niveau supérieur. Votre niveau: ${userLevel} → Mentor: ${mentorLevel}`)
       return
@@ -837,7 +874,6 @@ export default function MentorLoop({ addToast }) {
                 const alreadyContacted = hasContactedMentor(m.mentor_id)
                 const isPending = isRequestPending(m.mentor_id)
                 
-                // Ne pas afficher les mentors de niveau inférieur ou égal
                 if (LEVEL_ORDER[m.year_level] <= LEVEL_ORDER[userLevel]) return null
 
                 return (
@@ -881,39 +917,66 @@ export default function MentorLoop({ addToast }) {
       {activeTab === 'messages' && (
         <div className="chat-wrapper">
           <div className="chat-list">
-            {mentorships.map(m => (
-              <div
-                key={m.id}
-                className={`chat-li ${currentMentorship === m.id ? 'active' : ''}`}
-                onClick={() => loadMessages(m.id)}
-              >
-                <Avatar initials={m.partner_name?.charAt(0) || '?'} color="#4f7cff" size={28} />
-                <div style={{ flex: 1 }}>
-                  <div className="chat-li-name">
-                    {m.partner_name}
-                    {m.status === 'pending' && m.role === 'mentor' && (
-                      <span className="status-badge status-pending" style={{ marginLeft: 8, fontSize: 9 }}>En attente</span>
-                    )}
-                  </div>
-                  <div className="chat-li-preview">
-                    {messages[m.id]?.[messages[m.id].length - 1]?.content?.substring(0, 35) || 'Nouvelle conversation'}
-                  </div>
-                </div>
-                {conversationsWithUnread[m.id] && <div className="unread-dot" />}
-                
-                {/* ⭐ Bouton supprimer la conversation ⭐ */}
-                <button
-                  className="btn-icon"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    deleteConversation(m.id, m.partner_name)
-                  }}
-                  title="Supprimer la conversation"
+            {mentorships.map(m => {
+              // Déterminer si l'utilisateur actuel est le mentor dans cette relation
+              const isCurrentUserMentor = m.role === 'mentor'
+              const isPendingRequest = m.status === 'pending'
+              
+              return (
+                <div
+                  key={m.id}
+                  className={`chat-li ${currentMentorship === m.id ? 'active' : ''}`}
+                  onClick={() => loadMessages(m.id)}
                 >
-                  🗑️
-                </button>
-              </div>
-            ))}
+                  <Avatar initials={m.partner_name?.charAt(0) || '?'} color="#4f7cff" size={28} />
+                  <div style={{ flex: 1 }}>
+                    <div className="chat-li-name">
+                      {m.partner_name}
+                      {isPendingRequest && (
+                        <span className="status-badge status-pending" style={{ marginLeft: 8, fontSize: 9 }}>
+                          En attente
+                        </span>
+                      )}
+                      {m.status === 'active' && (
+                        <span className="status-badge status-accepted" style={{ marginLeft: 8, fontSize: 9 }}>
+                          Actif
+                        </span>
+                      )}
+                    </div>
+                    <div className="chat-li-preview">
+                      {messages[m.id]?.[messages[m.id].length - 1]?.content?.substring(0, 35) || 'Nouvelle conversation'}
+                    </div>
+                  </div>
+                  {conversationsWithUnread[m.id] && <div className="unread-dot" />}
+                  
+                  {/* ⭐ BOUTON ACCEPTER POUR LES MENTORS ⭐ */}
+                  {isPendingRequest && isCurrentUserMentor && (
+                    <button
+                      className="btn-accept"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        acceptMentorship(m.id, m.partner_name)
+                      }}
+                      title="Accepter la demande de mentorat"
+                    >
+                      ✅ Accepter
+                    </button>
+                  )}
+                  
+                  {/* Bouton supprimer */}
+                  <button
+                    className="btn-icon"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      deleteConversation(m.id, m.partner_name)
+                    }}
+                    title="Supprimer la conversation"
+                  >
+                    🗑️
+                  </button>
+                </div>
+              )
+            })}
             {mentorships.length === 0 && (
               <div style={{ padding: 20, textAlign: 'center', color: 'var(--muted)' }}>
                 Aucune conversation. Utilisez la recherche pour trouver un mentor !
@@ -988,15 +1051,15 @@ export default function MentorLoop({ addToast }) {
         </div>
       )}
 
-      {/* ONGLET SESSIONS - UNIQUE ENDROIT POUR PLANIFIER (UNIQUEMENT POUR LES MENTORS) */}
+      {/* ONGLET SESSIONS */}
       {activeTab === 'sessions' && (
         <div>
-          {/* Sélection du mentorat - Uniquement ceux où l'utilisateur est mentor */}
+          {/* Sélection du mentorat - Uniquement ceux où l'utilisateur est mentor ET actifs */}
           <Card style={{ marginBottom: 20 }}>
             <div style={{ marginBottom: 15, fontWeight: 700, fontSize: 14 }}>👥 Sélectionner un mentorat (en tant que mentor)</div>
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
               {mentorships
-                .filter(m => m.status !== 'pending' && m.role === 'mentor')
+                .filter(m => m.status === 'active' && m.role === 'mentor') // ⭐ UNIQUEMENT LES ACTIFS
                 .map(m => (
                   <button
                     key={m.id}
@@ -1014,18 +1077,31 @@ export default function MentorLoop({ addToast }) {
                   </button>
                 ))}
             </div>
-            {mentorships.filter(m => m.status !== 'pending' && m.role === 'mentor').length === 0 && (
+            {mentorships.filter(m => m.status === 'active' && m.role === 'mentor').length === 0 && (
               <div style={{ color: 'var(--muted)', marginTop: 10 }}>
-                Vous n'êtes actuellement mentor d'aucun étudiant.
+                Vous n'êtes actuellement mentor d'aucun étudiant. Les demandes doivent être acceptées d'abord.
               </div>
             )}
           </Card>
 
-          {/* Formulaire de planification (visible uniquement pour les mentors) */}
-          {selectedMentorshipForSession ? (
+          {/* Formulaire de planification */}
+          {selectedMentorshipForSession && (
             (() => {
               const mentorship = mentorships.find(m => m.id === selectedMentorshipForSession)
               const isMentor = mentorship?.role === 'mentor'
+              const isActive = mentorship?.status === 'active'
+              
+              if (!isActive) {
+                return (
+                  <Card style={{ marginBottom: 20, textAlign: 'center', padding: 30, background: 'rgba(251,146,60,0.1)' }}>
+                    <div style={{ fontSize: 40, marginBottom: 12 }}>⏳</div>
+                    <div>Cette demande de mentorat est en attente.</div>
+                    <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>
+                      Le mentor doit d'abord accepter la demande dans l'onglet Messages.
+                    </div>
+                  </Card>
+                )
+              }
               
               return isMentor ? (
                 <Card style={{ marginBottom: 20 }}>
@@ -1092,7 +1168,9 @@ export default function MentorLoop({ addToast }) {
                 </Card>
               )
             })()
-          ) : (
+          )}
+
+          {!selectedMentorshipForSession && (
             <Card style={{ marginBottom: 20, textAlign: 'center', padding: 30 }}>
               <div style={{ fontSize: 40, marginBottom: 12 }}>📅</div>
               <div>Sélectionnez un mentorat (en tant que mentor) pour planifier une session</div>

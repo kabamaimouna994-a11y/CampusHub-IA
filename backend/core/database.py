@@ -3,15 +3,33 @@ from sqlalchemy.orm import DeclarativeBase
 
 from core.config import settings
 
-# Moteur asynchrone
+
+def _build_engine_kwargs() -> dict:
+    """
+    Retourne les kwargs du moteur selon la base de données utilisée.
+    SQLite ne supporte pas pool_size / max_overflow.
+    """
+    url = settings.DATABASE_URL
+    if url.startswith("sqlite"):
+        return {
+            "echo": settings.DEBUG,
+            "connect_args": {"check_same_thread": False},
+        }
+    # PostgreSQL (ou autre SGBD)
+    return {
+        "echo": settings.DEBUG,
+        "pool_size": 10,
+        "max_overflow": 20,
+        "pool_pre_ping": True,   # vérifie que la connexion est vivante
+        "pool_recycle": 3600,    # recycle les connexions après 1h
+    }
+
+
 engine = create_async_engine(
     settings.DATABASE_URL,
-    echo=True,
-    pool_size=10,
-    max_overflow=20,
+    **_build_engine_kwargs(),
 )
 
-# Session factory
 AsyncSessionLocal = async_sessionmaker(
     engine,
     class_=AsyncSession,

@@ -33,6 +33,7 @@ class ProjectMatchResponse(BaseModel):
     explanation: str
     available_slots: int
     required_skills: list
+    created_by: int  # ⭐ AJOUTÉ
 
 
 class MentorMatchResponse(BaseModel):
@@ -109,6 +110,7 @@ async def get_project_matches(
                 explanation=match.explanation,
                 available_slots=project.available_slots,
                 required_skills=project.required_skills or [],
+                created_by=project.created_by,  # ⭐ AJOUTÉ
             ))
 
     matches.sort(key=lambda x: x.total_score, reverse=True)
@@ -127,7 +129,6 @@ async def create_project(
 ):
     """Créer un nouveau projet"""
     
-    # Convertir le type string en enum ProjectType
     try:
         project_type = ProjectType(project_data.type)
     except ValueError:
@@ -222,6 +223,35 @@ async def apply_to_project(
         "application_id": application.id,
         "match_score_percent": match.score_percent,
     }
+
+
+# ─────────────────────────────────────────────────────────────
+# DELETE /matching/projects/{project_id} (Supprimer un projet)
+# ─────────────────────────────────────────────────────────────
+
+@router.delete("/projects/{project_id}")
+async def delete_project(
+    project_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Supprimer un projet - seul le créateur peut le faire"""
+    
+    result = await db.execute(
+        select(Project).where(Project.id == project_id)
+    )
+    project = result.scalar_one_or_none()
+    
+    if not project:
+        raise HTTPException(status_code=404, detail="Projet non trouvé")
+    
+    if project.created_by != current_user.id:
+        raise HTTPException(status_code=403, detail="Seul le créateur peut supprimer ce projet")
+    
+    await db.delete(project)
+    await db.commit()
+    
+    return {"message": "Projet supprimé avec succès"}
 
 
 # ─────────────────────────────────────────────────────────────

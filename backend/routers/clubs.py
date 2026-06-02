@@ -29,6 +29,7 @@ class ClubResponse(BaseModel):
     member_count: int
     is_member: bool = False
     events_count: int = 0
+    admin_id: int  # ⭐ AJOUTÉ
     created_at: Optional[str] = None
 
 
@@ -39,7 +40,6 @@ async def get_clubs(
 ):
     """Récupère tous les clubs avec le statut d'adhésion de l'utilisateur"""
     
-    # Récupérer tous les clubs actifs
     result = await db.execute(
         select(Club).where(Club.is_active == True).options(
             selectinload(Club.members),
@@ -48,7 +48,6 @@ async def get_clubs(
     )
     clubs = result.scalars().all()
     
-    # Récupérer les clubs dont l'utilisateur est membre
     user_memberships = await db.execute(
         select(ClubMember.club_id).where(
             ClubMember.user_id == current_user.id, 
@@ -68,6 +67,7 @@ async def get_clubs(
             member_count=club.active_members_count,
             is_member=club.id in member_club_ids,
             events_count=len(club.events) if club.events else 0,
+            admin_id=club.admin_id,  # ⭐ AJOUTÉ
             created_at=club.created_at.isoformat() if club.created_at else None
         ))
     
@@ -81,17 +81,14 @@ async def get_kpis(
 ):
     """Récupère les KPIs des clubs"""
     
-    # Nombre total de clubs actifs
     total_clubs = await db.execute(select(func.count(Club.id)).where(Club.is_active == True))
     total_clubs = total_clubs.scalar() or 0
     
-    # Nombre total de membres actifs (uniques)
     active_members = await db.execute(
         select(func.count(ClubMember.user_id.distinct())).where(ClubMember.is_active == True)
     )
     active_members = active_members.scalar() or 0
     
-    # Top clubs par nombre de membres
     top_clubs_result = await db.execute(
         select(Club.id, Club.name, Club.icon, func.count(ClubMember.id).label("member_count"))
         .join(ClubMember, Club.id == ClubMember.club_id)
@@ -120,12 +117,10 @@ async def create_club(
 ):
     """Crée un nouveau club et ajoute le créateur comme président"""
     
-    # Vérifier si un club avec le même nom existe
     existing = await db.execute(select(Club).where(Club.name == data.name))
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="Un club avec ce nom existe déjà")
     
-    # Créer le club
     club = Club(
         name=data.name,
         description=data.description,
@@ -137,7 +132,6 @@ async def create_club(
     db.add(club)
     await db.flush()
     
-    # Ajouter le créateur comme président
     member = ClubMember(
         club_id=club.id,
         user_id=current_user.id,
@@ -151,6 +145,7 @@ async def create_club(
     return {
         "id": club.id,
         "name": club.name,
+        "admin_id": club.admin_id,  # ⭐ AJOUTÉ
         "message": f"Club '{club.name}' créé avec succès"
     }
 
@@ -163,13 +158,11 @@ async def join_club(
 ):
     """Rejoindre un club"""
     
-    # Vérifier si le club existe
     result = await db.execute(select(Club).where(Club.id == club_id, Club.is_active == True))
     club = result.scalar_one_or_none()
     if not club:
         raise HTTPException(status_code=404, detail="Club introuvable")
     
-    # Vérifier si déjà membre
     existing = await db.execute(
         select(ClubMember).where(
             ClubMember.club_id == club_id,
@@ -180,7 +173,6 @@ async def join_club(
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="Vous êtes déjà membre de ce club")
     
-    # Ajouter le membre
     member = ClubMember(
         club_id=club_id,
         user_id=current_user.id,
@@ -201,7 +193,6 @@ async def leave_club(
 ):
     """Quitter un club"""
     
-    # Trouver l'adhésion
     result = await db.execute(
         select(ClubMember).where(
             ClubMember.club_id == club_id,
@@ -213,7 +204,6 @@ async def leave_club(
     if not member:
         raise HTTPException(status_code=404, detail="Vous n'êtes pas membre de ce club")
     
-    # Si c'est le président, vérifier qu'il n'est pas le seul membre
     if member.role == "président":
         other_members = await db.execute(
             select(func.count(ClubMember.id)).where(
@@ -228,8 +218,36 @@ async def leave_club(
                 detail="Vous êtes président. Transférez d'abord la présidence ou supprimez le club."
             )
     
-    # Désactiver l'adhésion (soft delete)
     member.is_active = False
     await db.commit()
     
     return {"message": "Vous avez quitté le club"}
+
+
+# ─────────────────────────────────────────────────────────────
+# DELETE /clubs/{club_id} (Supprimer un club)
+# ─────────────────────────────────────────────────────────────
+
+@router.delete("/{club_id}")
+async def delete_club(
+    club_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Supprimer un club - seul l'administrateur peut le faire"""
+    
+    result = await db.execute(
+        select(Club).where(Club.id == club_id)
+    )
+    club = result.scalar_one_or_none()
+    
+    if not club:
+        raise HTTPException(status_code=404, detail="Club non trouvé")
+    
+    if club.admin_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Seul l'administrateur du club peut le supprimer")
+    
+    await db.delete(club)
+    await db.commit()
+    
+    return {"message": "Club supprimé avec succès"}

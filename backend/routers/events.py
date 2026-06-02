@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -25,6 +25,13 @@ class EventCreate(BaseModel):
     club_id: Optional[int] = None
 
 
+def to_naive_utc(dt: datetime) -> datetime:
+    """Convertit un datetime avec timezone en naive UTC."""
+    if dt.tzinfo is not None:
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
 @router.get("/")
 async def get_events(db: AsyncSession = Depends(get_db)):
     result = await db.execute(
@@ -46,6 +53,7 @@ async def get_events(db: AsyncSession = Depends(get_db)):
             "registered_count": e.confirmed_registrations_count,
             "available_spots": e.available_spots,
             "fill_rate": round(e.fill_rate * 100),
+            "organizer_id": e.organizer_id,  # ⭐ AJOUTÉ
         }
         for e in events
     ]
@@ -76,32 +84,45 @@ async def get_recommended_events(current_user: User = Depends(get_current_user),
             "registered_count": e.confirmed_registrations_count,
             "available_spots": e.available_spots,
             "match_score": min(score, 99),
+            "organizer_id": e.organizer_id,  # ⭐ AJOUTÉ
         })
     scored.sort(key=lambda x: x["match_score"], reverse=True)
     return scored
 
 
 @router.post("/", status_code=status.HTTP_201_CREATED)
-async def create_event(data: EventCreate, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def create_event(
+    data: EventCreate, 
+    current_user: User = Depends(get_current_user), 
+    db: AsyncSession = Depends(get_db)
+):
+    event_date_naive = to_naive_utc(data.event_date)
+    
     event = Event(
         title=data.title,
         description=data.description,
         emoji=data.emoji,
-        event_date=data.event_date,
+        event_date=event_date_naive,
         location=data.location,
         event_type=data.event_type,
         capacity=data.capacity,
         club_id=data.club_id,
         organizer_id=current_user.id,
         is_published=True,
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow()
     )
     db.add(event)
     await db.flush()
-    return {"id": event.id, "message": "Événement créé"}
+    return {"id": event.id, "message": "Événement créé", "organizer_id": current_user.id}
 
 
 @router.post("/{event_id}/register")
-async def register_event(event_id: int, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def register_event(
+    event_id: int, 
+    current_user: User = Depends(get_current_user), 
+    db: AsyncSession = Depends(get_db)
+):
     result = await db.execute(select(Event).where(Event.id == event_id).options(selectinload(Event.registrations)))
     event = result.scalar_one_or_none()
     if not event:
@@ -113,11 +134,16 @@ async def register_event(event_id: int, current_user: User = Depends(get_current
 
     reg = EventRegistration(event_id=event_id, user_id=current_user.id)
     db.add(reg)
+    await db.commit()
     return {"message": "Inscription confirmée"}
 
 
 @router.delete("/{event_id}/register")
-async def unregister_event(event_id: int, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def unregister_event(
+    event_id: int, 
+    current_user: User = Depends(get_current_user), 
+    db: AsyncSession = Depends(get_db)
+):
     result = await db.execute(
         select(EventRegistration).where(EventRegistration.event_id == event_id, EventRegistration.user_id == current_user.id)
     )
@@ -125,4 +151,34 @@ async def unregister_event(event_id: int, current_user: User = Depends(get_curre
     if not reg:
         raise HTTPException(status_code=404, detail="Inscription introuvable")
     await db.delete(reg)
+    await db.commit()
     return {"message": "Désinscription effectuée"}
+
+
+# ─────────────────────────────────────────────────────────────
+# DELETE /events/{event_id} (Supprimer un événement)
+# ─────────────────────────────────────────────────────────────
+
+@router.delete("/{event_id}")
+async def delete_event(
+    event_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Supprimer un événement - seul l'organisateur peut le faire"""
+    
+    result = await db.execute(
+        select(Event).where(Event.id == event_id)
+    )
+    event = result.scalar_one_or_none()
+    
+    if not event:
+        raise HTTPException(status_code=404, detail="Événement non trouvé")
+    
+    if event.organizer_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Seul l'organisateur peut supprimer cet événement")
+    
+    await db.delete(event)
+    await db.commit()
+    
+    return {"message": "Événement supprimé avec succès"}

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { Card, StatCard, Tag, Btn, ProgressBar, SectionHeader, Input } from '../components/UI.jsx'
 import { clubs, events, mentorat } from '../services/api'
 import { useAuth } from '../context/AuthContext'
+import api from '../services/api'
 
 const kc = `
   .clubs-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:13px; }
@@ -154,6 +155,19 @@ export default function KPIsCampus({ addToast }) {
     }
   }
 
+  const deleteClub = async (clubId, clubName) => {
+    if (window.confirm(`Supprimer le club "${clubName}" ?\n\nCette action est irréversible.`)) {
+      try {
+        await api.delete(`/api/clubs/${clubId}`)
+        addToast('🗑️', 'Club supprimé', `Le club "${clubName}" a été supprimé`)
+        fetchData()
+      } catch (error) {
+        console.error('Erreur suppression:', error)
+        addToast('❌', 'Erreur', error.response?.data?.detail || "Impossible de supprimer le club")
+      }
+    }
+  }
+
   const filtered = clubsList.filter(c =>
     c.name?.toLowerCase().includes(search.toLowerCase())
   )
@@ -294,14 +308,21 @@ export default function KPIsCampus({ addToast }) {
               <div className="cstat"><strong>{c.events_count || 0}</strong>événements</div>
             </div>
             <ProgressBar value={Math.min(100, (c.member_count || 0) * 2)} color="var(--accent)" />
-            <Btn
-              variant={c.is_member ? 'secondary' : 'primary'}
-              size="sm"
-              style={{ marginTop: 11, width: '100%' }}
-              onClick={() => c.is_member ? leaveClub(c.id, c.name) : joinClub(c.id, c.name)}
-            >
-              {c.is_member ? '✓ Membre' : 'Rejoindre'}
-            </Btn>
+            <div style={{ display: 'flex', gap: 8, marginTop: 11 }}>
+              {c.admin_id === user?.id && (
+                <Btn size="sm" variant="secondary" onClick={() => deleteClub(c.id, c.name)} style={{ flex: 1 }}>
+                  🗑️ Supprimer
+                </Btn>
+              )}
+              <Btn
+                variant={c.is_member ? 'secondary' : 'primary'}
+                size="sm"
+                style={{ flex: 1 }}
+                onClick={() => c.is_member ? leaveClub(c.id, c.name) : joinClub(c.id, c.name)}
+              >
+                {c.is_member ? '✓ Membre' : 'Rejoindre'}
+              </Btn>
+            </div>
           </div>
         ))}
         {filtered.length === 0 && (

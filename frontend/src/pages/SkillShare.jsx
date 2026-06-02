@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { Card, Tag, Btn, ProgressBar, SkillDots, Tabs, RingChart, SectionHeader, Input } from '../components/UI.jsx'
-import { skills, certifications } from '../services/api'
+import { skills, certifications as certificationsApi } from '../services/api'
 import { useAuth } from '../context/AuthContext'
 import { exportSkillsToPDF } from '../utils/pdfExport'
 
@@ -117,10 +117,8 @@ const SKILL_CATEGORIES = ['Développement', 'Data & IA', 'Design', 'Business', '
 const SKILL_LEVELS = ['débutant', 'intermédiaire', 'avancé', 'expert']
 const YEAR_LEVELS = ['Tous', 'B1', 'B2', 'B3', 'M1', 'M2']
 
-// Avatar par défaut
-const DEFAULT_AVATAR = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='80' viewBox='0 0 80 80'%3E%3Crect width='80' height='80' fill='%234f7cff'/%3E%3Ctext x='50%25' y='50%25' dominant-baseline='middle' text-anchor='middle' fill='white' font-size='32'%3E👤%3C/text%3E%3C/svg%3E"
+const DEFAULT_AVATAR = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='80' viewBox='0 0 80 80'%3E%3Crect width='80' height='80' fill='%234f7cff'/%3E%3Ctext x='50%25' y='50%25' dominant-baseline='middle' text-anchor='middle' fill='white' font-size='32'%3E%F0%9F%91%A4%3C/text%3E%3C/svg%3E"
 
-// Composant d'upload d'avatar
 const AvatarUpload = ({ currentAvatar, onUploadSuccess, addToast }) => {
   const [uploading, setUploading] = useState(false)
   const [avatarSrc, setAvatarSrc] = useState(DEFAULT_AVATAR)
@@ -141,21 +139,17 @@ const AvatarUpload = ({ currentAvatar, onUploadSuccess, addToast }) => {
   const handleUpload = async (event) => {
     const file = event.target.files[0]
     if (!file) return
-    
     if (!file.type.startsWith('image/')) {
       addToast('❌', 'Format invalide', 'Veuillez choisir une image')
       return
     }
-    
     if (file.size > 2 * 1024 * 1024) {
       addToast('❌', 'Fichier trop lourd', 'Maximum 2MB')
       return
     }
-    
     setUploading(true)
     const formData = new FormData()
     formData.append('file', file)
-    
     try {
       const token = localStorage.getItem('access_token')
       const response = await fetch('http://localhost:8000/api/users/me/avatar', {
@@ -163,22 +157,17 @@ const AvatarUpload = ({ currentAvatar, onUploadSuccess, addToast }) => {
         headers: { 'Authorization': `Bearer ${token}` },
         body: formData
       })
-      
       if (!response.ok) {
         const error = await response.json()
         throw new Error(error.detail || 'Erreur upload')
       }
-      
       const data = await response.json()
       const newAvatarUrl = `http://localhost:8000${data.avatar_url}`
       setAvatarSrc(newAvatarUrl)
-      
       if (onUploadSuccess) {
         await onUploadSuccess(data.avatar_url)
       }
-      
       addToast('✅', 'Photo mise à jour', 'Votre avatar a été changé')
-      
     } catch (error) {
       console.error('Erreur upload:', error)
       addToast('❌', 'Erreur', error.message || "Impossible d'uploader l'image")
@@ -199,13 +188,7 @@ const AvatarUpload = ({ currentAvatar, onUploadSuccess, addToast }) => {
         <img
           src={avatarSrc}
           alt="Avatar"
-          style={{
-            width: 80,
-            height: 80,
-            borderRadius: '50%',
-            objectFit: 'cover',
-            border: '3px solid var(--accent)'
-          }}
+          style={{ width: 80, height: 80, borderRadius: '50%', objectFit: 'cover', border: '3px solid var(--accent)' }}
           onError={handleImageError}
         />
         <div className="avatar-upload-overlay">📷</div>
@@ -225,16 +208,14 @@ export default function SkillShare({ addToast }) {
   const [newSkill, setNewSkill] = useState({ name: '', category: 'Développement', level: 'intermédiaire' })
   const [search, setSearch] = useState('')
   const [avatarUrl, setAvatarUrl] = useState(null)
-  
-  // États pour la recherche d'étudiants
+
   const [students, setStudents] = useState([])
   const [searchingStudents, setSearchingStudents] = useState(false)
   const [yearFilter, setYearFilter] = useState('Tous')
   const [skillFilter, setSkillFilter] = useState('')
   const [searchTimeout, setSearchTimeout] = useState(null)
-  
-  // États pour les certifications
-  const [certifications, setCertifications] = useState([])
+
+  const [certificationsList, setCertificationsList] = useState([])
   const [showCertForm, setShowCertForm] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [newCert, setNewCert] = useState({
@@ -264,7 +245,6 @@ export default function SkillShare({ addToast }) {
     }
   }, [user])
 
-  // Recherche d'étudiants avec debounce
   useEffect(() => {
     if (tab === 'explorer') {
       if (searchTimeout) clearTimeout(searchTimeout)
@@ -290,8 +270,8 @@ export default function SkillShare({ addToast }) {
 
   const fetchCertifications = async () => {
     try {
-      const res = await certifications.getAll()
-      setCertifications(res.data || [])
+      const res = await certificationsApi.getAll()
+      setCertificationsList(res.data || [])
     } catch (error) {
       console.error('Erreur chargement certifications:', error)
     }
@@ -305,7 +285,6 @@ export default function SkillShare({ addToast }) {
       if (search) url += `q=${encodeURIComponent(search)}&`
       if (yearFilter !== 'Tous') url += `year_level=${yearFilter}&`
       if (skillFilter) url += `skill=${encodeURIComponent(skillFilter)}&`
-      
       const response = await fetch(url, {
         headers: { 'Authorization': `Bearer ${token}` }
       })
@@ -356,14 +335,13 @@ export default function SkillShare({ addToast }) {
 
   const handleExportPDF = () => {
     if (userSkills.length === 0) {
-      if (addToast) addToast('⚠️', 'Aucune compétence', 'Ajoutez des compétences avant d\'exporter')
+      if (addToast) addToast('⚠️', 'Aucune compétence', "Ajoutez des compétences avant d'exporter")
       return
     }
     exportSkillsToPDF(user, userSkills)
     if (addToast) addToast('📄', 'Export PDF', 'Votre portfolio a été généré')
   }
 
-  // Gestion des certifications
   const handleFileUpload = async (event) => {
     const file = event.target.files[0]
     if (!file) return
@@ -375,21 +353,18 @@ export default function SkillShare({ addToast }) {
       addToast('⚠️', 'Erreur', 'Le titre est requis')
       return
     }
-    
     setUploading(true)
     try {
-      await certifications.create({
+      await certificationsApi.create({
         title: newCert.title,
         issuer: newCert.issuer,
         issue_date: newCert.issue_date || null,
         credential_id: newCert.credential_id,
         credential_url: newCert.credential_url
       })
-      
       if (selectedFile) {
-        await certifications.uploadFile(selectedFile)
+        await certificationsApi.uploadFile(selectedFile)
       }
-      
       addToast('✅', 'Certification ajoutée', `${newCert.title} a été ajoutée`)
       setShowCertForm(false)
       setNewCert({ title: '', issuer: '', issue_date: '', credential_id: '', credential_url: '' })
@@ -406,7 +381,7 @@ export default function SkillShare({ addToast }) {
   const deleteCertification = async (id, title) => {
     if (window.confirm(`Supprimer la certification "${title}" ?`)) {
       try {
-        await certifications.delete(id)
+        await certificationsApi.delete(id)
         addToast('🗑️', 'Supprimée', `La certification a été supprimée`)
         fetchCertifications()
       } catch (error) {
@@ -467,8 +442,8 @@ export default function SkillShare({ addToast }) {
         <div className="profile-grid">
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             <Card>
-              <AvatarUpload 
-                currentAvatar={avatarUrl || user?.avatar_url} 
+              <AvatarUpload
+                currentAvatar={avatarUrl || user?.avatar_url}
                 onUploadSuccess={async (newAvatar) => {
                   setAvatarUrl(newAvatar)
                   if (refreshUser) await refreshUser()
@@ -546,31 +521,28 @@ export default function SkillShare({ addToast }) {
         <div>
           <Card>
             <div className="search-row">
-              <Input 
-                icon="🔍" 
-                placeholder="Rechercher un étudiant par nom..." 
+              <Input
+                icon="🔍"
+                placeholder="Rechercher un étudiant par nom..."
                 value={search}
                 onChange={e => setSearch(e.target.value)}
                 style={{ flex: 1 }}
               />
             </div>
-            
             <div className="filter-row">
               <select className="input" value={yearFilter} onChange={e => setYearFilter(e.target.value)} style={{ width: 'auto' }}>
                 {YEAR_LEVELS.map(level => (
                   <option key={level} value={level}>{level === 'Tous' ? '📚 Tous niveaux' : `🎓 ${level}`}</option>
                 ))}
               </select>
-              
-              <input 
-                className="input" 
-                placeholder="Filtrer par compétence..." 
+              <input
+                className="input"
+                placeholder="Filtrer par compétence..."
                 value={skillFilter}
                 onChange={e => setSkillFilter(e.target.value)}
                 style={{ width: 200 }}
               />
             </div>
-
             {searchingStudents ? (
               <div className="loading-spinner">
                 <div className="spinner"></div>
@@ -591,8 +563,7 @@ export default function SkillShare({ addToast }) {
                         width: 48, height: 48, borderRadius: '50%',
                         background: 'linear-gradient(135deg, var(--accent), var(--accent2))',
                         display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        fontSize: 20, color: 'white', fontWeight: 'bold',
-                        flexShrink: 0
+                        fontSize: 20, color: 'white', fontWeight: 'bold', flexShrink: 0
                       }}>
                         {student.full_name?.charAt(0) || '?'}
                       </div>
@@ -601,11 +572,9 @@ export default function SkillShare({ addToast }) {
                         <div className="student-meta">{student.year_level} · {student.specialty || 'Spécialité non renseignée'}</div>
                       </div>
                     </div>
-                    
                     {student.bio && (
                       <div className="student-bio">{student.bio.substring(0, 80)}...</div>
                     )}
-                    
                     <div className="student-skills">
                       {student.skills?.slice(0, 4).map((skill, idx) => (
                         <Tag key={idx} color="blue" size="sm">{skill.name}</Tag>
@@ -614,7 +583,6 @@ export default function SkillShare({ addToast }) {
                         <Tag color="muted" size="sm">+{student.skills.length - 4}</Tag>
                       )}
                     </div>
-                    
                     <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
                       <Btn size="sm" variant="primary" style={{ flex: 1 }} onClick={() => {
                         addToast('💬', 'Contacter', `Envoyer un message à ${student.full_name}`)
@@ -692,7 +660,7 @@ export default function SkillShare({ addToast }) {
           )}
 
           <Card title="📜 Mes certifications">
-            {certifications.length === 0 ? (
+            {certificationsList.length === 0 ? (
               <div style={{ textAlign: 'center', padding: 40, color: 'var(--muted)' }}>
                 <div style={{ fontSize: 40, marginBottom: 12 }}>🏅</div>
                 <div>Aucune certification pour le moment</div>
@@ -701,7 +669,7 @@ export default function SkillShare({ addToast }) {
                 </Btn>
               </div>
             ) : (
-              certifications.map(cert => (
+              certificationsList.map(cert => (
                 <div key={cert.id} className="cert-card">
                   <div style={{ fontSize: 28 }}>🏅</div>
                   <div style={{ flex: 1 }}>
@@ -712,11 +680,6 @@ export default function SkillShare({ addToast }) {
                     </div>
                     {cert.credential_id && <div style={{ fontSize: 10, color: 'var(--muted)' }}>ID: {cert.credential_id}</div>}
                   </div>
-                  {cert.is_verified ? (
-                    <Tag color="green">✓ Vérifiée</Tag>
-                  ) : (
-                    <Tag color="orange">En attente</Tag>
-                  )}
                   <Btn size="sm" variant="secondary" onClick={() => deleteCertification(cert.id, cert.title)}>🗑️</Btn>
                 </div>
               ))

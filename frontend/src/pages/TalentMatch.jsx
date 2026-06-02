@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { Tag, Btn, ProgressBar, SectionHeader, Card } from '../components/UI.jsx'
 import { matching } from '../services/api'
 import api from '../services/api'
+import { useAuth } from '../context/AuthContext'
 
 const tm = `
   .project-grid { display: grid; grid-template-columns: repeat(2,1fr); gap: 14px; margin-bottom: 22px; }
@@ -39,6 +40,7 @@ const TYPE_COLOR = {
 }
 
 export default function TalentMatch({ addToast }) {
+  const { user } = useAuth()
   const [filter, setFilter] = useState('tous')
   const [projects, setProjects] = useState([])
   const [loading, setLoading] = useState(true)
@@ -91,13 +93,11 @@ export default function TalentMatch({ addToast }) {
       return
     }
     try {
-      // Transformer les compétences en liste de strings (pas d'objets)
       const skillsList = newProject.required_skills
         .split(',')
         .filter(s => s.trim())
         .map(s => s.trim())
       
-      // ⭐ CORRECTION : Utiliser matching.createProject au lieu de api.post
       await matching.createProject({
         title: newProject.title,
         description: newProject.description,
@@ -121,6 +121,19 @@ export default function TalentMatch({ addToast }) {
     } catch (error) {
       console.error('Erreur création:', error)
       addToast('❌', 'Erreur', error.response?.data?.detail || "Impossible de créer le projet")
+    }
+  }
+
+  const deleteProject = async (projectId, projectTitle) => {
+    if (window.confirm(`Supprimer le projet "${projectTitle}" ?\n\nCette action est irréversible.`)) {
+      try {
+        await api.delete(`/api/matching/projects/${projectId}`)
+        addToast('🗑️', 'Projet supprimé', `Le projet "${projectTitle}" a été supprimé`)
+        fetchProjects()
+      } catch (error) {
+        console.error('Erreur suppression:', error)
+        addToast('❌', 'Erreur', error.response?.data?.detail || "Impossible de supprimer le projet")
+      }
     }
   }
 
@@ -192,6 +205,7 @@ export default function TalentMatch({ addToast }) {
         {projects.map(p => {
           const c = TYPE_COLOR[p.project_type] || TYPE_COLOR.tech
           const isApplied = appliedProjects.has(p.project_id)
+          const isCreator = p.created_by === user?.id
           return (
             <div key={p.project_id} className="project-card">
               <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 3, background: c.line, borderRadius: '0 0 var(--radius) var(--radius)' }} />
@@ -213,9 +227,16 @@ export default function TalentMatch({ addToast }) {
                 <span style={{ fontSize: 11, color: 'var(--muted)' }}>
                   {p.available_slots || 0} poste(s) disponible(s)
                 </span>
-                <Btn size="sm" variant={isApplied ? 'secondary' : 'primary'} onClick={() => applyToProject(p.project_id, p.project_title)}>
-                  {isApplied ? '✓ Postulé' : 'Postuler'}
-                </Btn>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  {isCreator && (
+                    <Btn size="sm" variant="secondary" onClick={() => deleteProject(p.project_id, p.project_title)}>
+                      🗑️ Supprimer
+                    </Btn>
+                  )}
+                  <Btn size="sm" variant={isApplied ? 'secondary' : 'primary'} onClick={() => applyToProject(p.project_id, p.project_title)}>
+                    {isApplied ? '✓ Postulé' : 'Postuler'}
+                  </Btn>
+                </div>
               </div>
             </div>
           )

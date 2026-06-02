@@ -149,6 +149,55 @@ async def create_mentorship(
     }
 
 
+# ========== ACCEPTER UN MENTORAT ==========
+
+@router.put("/{mentorship_id}/accept")
+async def accept_mentorship(
+    mentorship_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Accepter une demande de mentorat (pour le mentor uniquement)"""
+    
+    # Récupérer le mentorat avec les relations
+    result = await db.execute(
+        select(Mentorship)
+        .where(Mentorship.id == mentorship_id)
+        .options(selectinload(Mentorship.mentor), selectinload(Mentorship.mentee))
+    )
+    mentorship = result.scalar_one_or_none()
+    
+    if not mentorship:
+        raise HTTPException(status_code=404, detail="Mentorat non trouvé")
+    
+    # Vérifier que l'utilisateur actuel est bien le mentor
+    if mentorship.mentor_id != current_user.id:
+        raise HTTPException(
+            status_code=403, 
+            detail="Vous n'êtes pas le mentor de cette relation. Seul le mentor peut accepter la demande."
+        )
+    
+    # Vérifier que le statut est 'pending'
+    if mentorship.status != 'pending':
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Impossible d'accepter : le statut actuel est '{mentorship.status}'. Seules les demandes en attente peuvent être acceptées."
+        )
+    
+    # Mettre à jour le statut
+    mentorship.status = 'active'
+    await db.flush()
+    
+    # Retourner les informations mises à jour
+    return {
+        "message": "Demande de mentorat acceptée avec succès",
+        "id": mentorship.id,
+        "status": mentorship.status,
+        "mentor_name": mentorship.mentor.full_name if mentorship.mentor else None,
+        "mentee_name": mentorship.mentee.full_name if mentorship.mentee else None
+    }
+
+
 # ========== MESSAGES ==========
 
 @router.post("/{mentorship_id}/messages", status_code=status.HTTP_201_CREATED)
@@ -402,7 +451,7 @@ async def get_session_detail(
     }
 
 
-@router.patch("//{mentorship_id}/sessions/{session_id}")
+@router.patch("/{mentorship_id}/sessions/{session_id}")
 async def update_session(
     mentorship_id: int,
     session_id: int,

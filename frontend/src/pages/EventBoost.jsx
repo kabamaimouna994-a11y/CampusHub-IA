@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { Tag, Btn, ProgressBar, SectionHeader, Card } from '../components/UI.jsx'
 import { events } from '../services/api'
 import api from '../services/api'
+import { useAuth } from '../context/AuthContext'
 
 const eb = `
   .events-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; }
@@ -47,6 +48,7 @@ const BANNER_BG = {
 }
 
 export default function EventBoost({ addToast }) {
+  const { user } = useAuth()
   const [filter, setFilter] = useState('tous')
   const [eventsList, setEventsList] = useState([])
   const [registeredEvents, setRegisteredEvents] = useState(new Set())
@@ -75,6 +77,8 @@ export default function EventBoost({ addToast }) {
         data = data.filter(e => e.event_type === filter)
       }
       setEventsList(data)
+      const userRegistrations = data.filter(e => e.is_registered).map(e => e.id)
+      setRegisteredEvents(new Set(userRegistrations))
     } catch (error) {
       console.error('Erreur chargement événements:', error)
       addToast('❌', 'Erreur', 'Impossible de charger les événements')
@@ -108,7 +112,7 @@ export default function EventBoost({ addToast }) {
       return
     }
     try {
-      await api.post('/api/events/', {
+      await events.create({
         ...newEvent,
         event_date: new Date(newEvent.event_date).toISOString()
       })
@@ -127,6 +131,19 @@ export default function EventBoost({ addToast }) {
     } catch (error) {
       console.error('Erreur création:', error)
       addToast('❌', 'Erreur', error.response?.data?.detail || "Impossible de créer l'événement")
+    }
+  }
+
+  const deleteEvent = async (eventId, eventTitle) => {
+    if (window.confirm(`Supprimer l'événement "${eventTitle}" ?\n\nCette action est irréversible.`)) {
+      try {
+        await api.delete(`/api/events/${eventId}`)
+        addToast('🗑️', 'Événement supprimé', `L'événement "${eventTitle}" a été supprimé`)
+        fetchEvents()
+      } catch (error) {
+        console.error('Erreur suppression:', error)
+        addToast('❌', 'Erreur', error.response?.data?.detail || "Impossible de supprimer l'événement")
+      }
     }
   }
 
@@ -200,6 +217,7 @@ export default function EventBoost({ addToast }) {
           const fillPct = Math.round(((e.registered_count || 0) / (e.capacity || 1)) * 100)
           const isReg = registeredEvents.has(e.id)
           const isTopMatch = (e.fill_rate || 0) > 70
+          const isOrganizer = e.organizer_id === user?.id
           const color = '#4f7cff'
 
           return (
@@ -227,6 +245,11 @@ export default function EventBoost({ addToast }) {
                   </span>
                   <div style={{ display: 'flex', gap: 5, alignItems: 'center' }}>
                     <Tag color="green">🎯 {e.fill_rate || 0}%</Tag>
+                    {isOrganizer && (
+                      <Btn size="sm" variant="secondary" onClick={() => deleteEvent(e.id, e.title)}>
+                        🗑️
+                      </Btn>
+                    )}
                     <Btn size="sm" variant={isReg ? 'secondary' : 'primary'} onClick={() => registerEvent(e.id, e.title)}>
                       {isReg ? '✓ Inscrit' : "S'inscrire"}
                     </Btn>

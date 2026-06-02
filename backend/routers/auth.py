@@ -14,7 +14,7 @@ from core.security import (
     create_refresh_token,
     decode_token,
 )
-from models.user import User, YearLevel
+from models.user import User, YearLevel, UserRole
 
 router = APIRouter()
 
@@ -24,7 +24,7 @@ class RegisterRequest(BaseModel):
     password: str
     first_name: str
     last_name: str
-    year_level: str = "B1"  # Changé: str au lieu de YearLevel
+    year_level: str = "B1"
     specialty: Optional[str] = None
 
     @field_validator("email")
@@ -83,7 +83,7 @@ async def register(data: RegisterRequest, db: AsyncSession = Depends(get_db)):
         except ValueError:
             raise HTTPException(status_code=400, detail="Niveau académique invalide")
 
-    # Créer l'utilisateur
+    # Créer l'utilisateur avec le rôle défini
     user = User(
         email=data.email,
         hashed_password=hash_password(data.password),
@@ -91,9 +91,11 @@ async def register(data: RegisterRequest, db: AsyncSession = Depends(get_db)):
         last_name=data.last_name,
         year_level=year_level_enum,
         specialty=data.specialty,
+        role=UserRole.STUDENT,  # ⭐ Définition explicite du rôle
     )
     db.add(user)
     await db.flush()
+    await db.refresh(user)
 
     return TokenResponse(
         access_token=create_access_token({"sub": str(user.id)}),

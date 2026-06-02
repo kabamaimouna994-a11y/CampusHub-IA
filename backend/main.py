@@ -3,14 +3,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 
-from core.database import create_tables
+# ⚠️ create_tables n'est plus importé
 from routers import auth, users, skills, matching, mentorat, clubs, events, admin, certifications
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Initialise la base de données au démarrage."""
-    await create_tables()
+    """Initialise l'application."""
+    # ⚠️ Plus de create_tables() - Les migrations sont gérées par Alembic
+    # Les tables sont créées via : alembic upgrade head
     yield
 
 
@@ -23,17 +24,14 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
-# Configuration CORS - Version qui fonctionne
+# Configuration CORS - Ultra permissive pour le développement
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:3000",
-    ],
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 # Servir les fichiers statiques
