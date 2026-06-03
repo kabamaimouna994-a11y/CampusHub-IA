@@ -1,10 +1,5 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
-import os
-
-# Chemin absolu vers le fichier .env
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-ENV_FILE = os.path.join(BASE_DIR, ".env")
 
 
 class Settings(BaseSettings):
@@ -33,7 +28,7 @@ class Settings(BaseSettings):
     FRONTEND_URL: str = "http://localhost:5173"
     
     model_config = SettingsConfigDict(
-        env_file=ENV_FILE,
+        env_file="../.env",  # ⚠️ Changement ici : cherche .env à la racine
         env_file_encoding="utf-8",
         case_sensitive=True,
         extra="ignore"
